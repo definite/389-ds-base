@@ -240,6 +240,36 @@ slapi_filter_test_ext(
 }
 
 
+static const char *
+filter_type_as_string(int filter_type)
+{
+    switch (filter_type) {
+    case LDAP_FILTER_AND:
+        return "&";
+    case LDAP_FILTER_OR:
+        return "|";
+    case LDAP_FILTER_NOT:
+        return "!";
+    case LDAP_FILTER_EQUALITY:
+        return "=";
+    case LDAP_FILTER_SUBSTRINGS:
+        return "*";
+    case LDAP_FILTER_GE:
+        return ">=";
+    case LDAP_FILTER_LE:
+        return "<=";
+    case LDAP_FILTER_PRESENT:
+        return "=*";
+    case LDAP_FILTER_APPROX:
+        return "~";
+    case LDAP_FILTER_EXT:
+        return "EXT";
+    default:
+        return "?";
+    }
+}
+
+
 int
 test_ava_filter(
     Slapi_PBlock *pb,
@@ -253,7 +283,13 @@ test_ava_filter(
 {
     int rc;
 
-    slapi_log_err(SLAPI_LOG_FILTER, "test_ava_filter", "=>\n");
+    if (slapi_is_loglevel_set(SLAPI_LOG_FILTER)) {
+        char *val = slapi_berval_get_string_copy(&ava->ava_value);
+        char buf[BUFSIZ];
+        slapi_log_err(SLAPI_LOG_FILTER, "test_ava_filter", "=> AVA: %s%s%s\n",
+                      ava->ava_type, filter_type_as_string(ftype), escape_string(val, buf));
+        slapi_ch_free_string(&val);
+    }
 
     *access_check_done = 0;
 
@@ -296,7 +332,27 @@ test_ava_filter(
         rc = -1;
         for (; a != NULL; a = a->a_next) {
             if (slapi_attr_type_cmp(ava->ava_type, a->a_type, SLAPI_TYPE_CMP_SUBTYPE) == 0) {
-                rc = plugin_call_syntax_filter_ava(a, ftype, ava);
+                if ((ftype == LDAP_FILTER_EQUALITY) &&
+                    (slapi_attr_is_dn_syntax_type(a->a_type))) {
+                    /* This path is for a performance improvement */
+
+                    /* In case of equality filter we can get benefit of the
+                     * sorted valuearray (from valueset).
+                     * This improvement is limited to DN syntax attributes for
+                     * which the sorted valueset was designed.
+                     */
+                    Slapi_Value *sval = NULL;
+                    sval = slapi_value_new_berval(&ava->ava_value);
+                    if (slapi_valueset_find((const Slapi_Attr *)a, &a->a_present_values, sval)) {
+                        rc = 0;
+                    }
+                    slapi_value_free(&sval);
+                } else {
+                    /* When sorted valuearray optimization cannot be used
+                     * lets filter the value according to its syntax
+                     */
+                    rc = plugin_call_syntax_filter_ava(a, ftype, ava);
+                }
                 if (rc == 0) {
                     break;
                 }
