@@ -1,21 +1,29 @@
 import cockpit from "cockpit";
 import React from 'react';
 import {
-    Alert,
-    Card,
-    CardBody,
-    CardTitle,
-    Pagination,
-    SimpleList,
-    SimpleListItem,
-    Spinner,
-    Text,
-    TextContent,
-    TextVariants,
-    Wizard,
+	Alert,
+	Card,
+	CardBody,
+	CardTitle,
+	Pagination,
+	SimpleList,
+	SimpleListItem,
+	Spinner,
+	Text,
+	TextContent,
+	TextVariants
 } from '@patternfly/react-core';
 import {
-    Table, TableHeader, TableBody, TableVariant, headerCol
+	Wizard
+} from '@patternfly/react-core/deprecated';
+import {
+    Table,
+    Thead,
+    Tr,
+    Th,
+    Tbody,
+    Td,
+	headerCol
 } from '@patternfly/react-table';
 import EditableTable from '../../lib/editableTable.jsx';
 import {
@@ -100,7 +108,9 @@ class GenericUpdate extends React.Component {
                                 myLdifArray,
                                 (result) => {
                                     this.setState({
-                                        commandOutput: result.errorCode === 0 ? _("Successfully added entry!") : _("Failed to add entry, error: ") + result.errorCode,
+                                        commandOutput: result.errorCode === 0 ?
+                                            _("Successfully added entry!") :
+                                            _("Failed to add entry: ") + result.output,
                                         resultVariant: result.errorCode === 0 ? 'success' : 'danger',
                                         adding: false,
                                     }, () => {
@@ -132,7 +142,6 @@ class GenericUpdate extends React.Component {
     }
 
     componentDidMount () {
-        console.log('In GenericUpdate - componentDidMount()');
         // TODO:
         // Use an ldapsearch request on the schema entry.
         // Check with RHDS Engineering ( dsconf? to retrieve the list of attrs for a given oc)
@@ -519,15 +528,43 @@ class GenericUpdate extends React.Component {
                     onPerPageSelect={this.handlePerPageSelect}
                     isCompact
                 />
+                {/* Updated Table structure for Patternfly 5 */}
                 <Table
-                    cells={columnsAttrs}
-                    rows={pagedRowsAttrs}
-                    onSelect={this.handleSelect}
-                    variant={TableVariant.compact}
-                    aria-label="Pagination Attributes"
+                    aria-label="Attributes Table"
+                    variant="compact"
                 >
-                    <TableHeader />
-                    <TableBody />
+                    <Thead>
+                        <Tr>
+                            <Th screenReaderText="Select Attributes" />
+                            {columnsAttrs.map((column, columnIndex) => (
+                                <Th key={columnIndex}>
+                                    {typeof column === 'object' ? column.title : column}
+                                </Th>
+                            ))}
+                        </Tr>
+                    </Thead>
+                    <Tbody>
+                        {pagedRowsAttrs.map((row, rowIndex) => (
+                            <Tr key={rowIndex}>
+                                <Td
+                                    select={{
+                                        rowIndex,
+                                        onSelect: this.handleSelect,
+                                        isSelected: row.selected,
+                                        isDisabled: row.disableSelection
+                                    }}
+                                />
+                                {row.cells.map((cell, cellIndex) => (
+                                    <Td
+                                        key={`${rowIndex}_${cellIndex}`}
+                                        dataLabel={columnsAttrs[cellIndex]?.title || columnsAttrs[cellIndex]}
+                                    >
+                                        {cell}
+                                    </Td>
+                                ))}
+                            </Tr>
+                        ))}
+                    </Tbody>
                 </Table>
             </div>
         );
@@ -566,7 +603,7 @@ class GenericUpdate extends React.Component {
         );
 
         const ldifListItems = ldifArray.map((line, index) =>
-            <SimpleListItem key={index} isCurrent={line.startsWith('dn: ')}>
+            <SimpleListItem key={index} isActive={line.startsWith('dn: ')}>
                 {line}
             </SimpleListItem>
         );
@@ -661,7 +698,7 @@ class GenericUpdate extends React.Component {
                 component: reviewStep,
                 nextButtonText: _("Finish"),
                 canJumpTo: stepIdReached >= 5 && stepIdReached < 5,
-                hideBackButton: true,
+                hideBackButton: this.state.resultVariant === "success" ? true : false,
                 enableNext: !this.state.adding
             }
         ];

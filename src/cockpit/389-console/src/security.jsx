@@ -1,35 +1,35 @@
 import cockpit from "cockpit";
 import React from "react";
 import { DoubleConfirmModal } from "./lib/notifications.jsx";
-import { log_cmd } from "./lib/tools.jsx";
+import { log_cmd, getApiErrorMessage } from "./lib/tools.jsx";
 import { CertificateManagement } from "./lib/security/certificateManagement.jsx";
+import EncryptionModules from "./lib/security/encryptionModules.jsx";
 import { SecurityEnableModal } from "./lib/security/securityModals.jsx";
 import { Ciphers } from "./lib/security/ciphers.jsx";
 import {
-    Button,
-    Checkbox,
-    Form,
-    Grid,
-    GridItem,
-    Select,
-    SelectOption,
-    SelectVariant,
-    Spinner,
-    Switch,
-    Tab,
-    Tabs,
-    TabTitleText,
-    TextInput,
-    Text,
-    TextContent,
-    TextVariants,
-} from "@patternfly/react-core";
+	Button,
+	Checkbox,
+	Form,
+	Grid,
+	GridItem,
+	ProgressStepper,
+	ProgressStep,
+	Spinner,
+	Switch,
+	Tab,
+	Tabs,
+	TabTitleText,
+	TextInput,
+	Text,
+	TextContent,
+	TextVariants
+} from '@patternfly/react-core';
+import TypeaheadSelect from "./dsBasicComponents.jsx";
 import PropTypes from "prop-types";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faSyncAlt
-} from '@fortawesome/free-solid-svg-icons';
-import '@fortawesome/fontawesome-svg-core/styles.css';
+import { SyncAltIcon } from '@patternfly/react-icons';
+import InProgressIcon from '@patternfly/react-icons/dist/esm/icons/in-progress-icon';
+import PendingIcon from '@patternfly/react-icons/dist/esm/icons/pending-icon';
+import CheckCircleIcon from '@patternfly/react-icons/dist/esm/icons/check-circle-icon';
 
 const _ = cockpit.gettext;
 
@@ -43,6 +43,7 @@ const configAttrs = [
     'checkHostname',
     'allowWeakCipher',
     'nstlsallowclientrenegotiation',
+    'extractPEMFiles',
 ];
 
 const configCoreAttrs = [
@@ -66,6 +67,8 @@ export class Security extends React.Component {
             primaryCertName: '',
             serverCertNames: [],
             serverCerts: [],
+            CACerts: [],
+            CACertNames: [],
             isMinSSLOpen: false,
             isMaxSSLOpen: false,
             isClientAuthOpen: false,
@@ -105,8 +108,20 @@ export class Security extends React.Component {
             _nssslpersonalityssl: '',
             _nssslpersonalityssllist: "",
             _nstlsallowclientrenegotiation: true,
-
             isServerCertOpen: false,
+            // progress steps
+            configLoaded: false,
+            configLoading: false,
+            ciphersLoaded: false,
+            ciphersLoading: false,
+            certsLoaded: false,
+            certsLoading: false,
+            caCertsLoaded: false,
+            caCertsLoading: false,
+            csrsLoaded: false,
+            csrsLoading: false,
+            orphanKeysLoaded: false,
+            orphanKeysLoading: false,
         };
 
         // Server Cert
@@ -121,10 +136,10 @@ export class Security extends React.Component {
                 disableSaveBtn,
             });
         };
-        this.handleServerCertToggle = isServerCertOpen => {
-            this.setState({
-                isServerCertOpen
-            });
+        this.handleServerCertToggle = (_event, isServerCertOpen) => {
+        this.setState({
+            isServerCertOpen
+        });
         };
         this.handleServerCertClear = () => {
             this.setState({
@@ -151,7 +166,7 @@ export class Security extends React.Component {
             return false;
         };
 
-        this.handleMinSSLToggle = isMinSSLOpen => {
+        this.handleMinSSLToggle = (_event, isMinSSLOpen) => {
             this.setState({
                 isMinSSLOpen
             });
@@ -170,7 +185,7 @@ export class Security extends React.Component {
             });
         };
 
-        this.handleMaxSSLToggle = isMaxSSLOpen => {
+        this.handleMaxSSLToggle = (_event, isMaxSSLOpen) => {
             this.setState({
                 isMaxSSLOpen
             });
@@ -189,7 +204,7 @@ export class Security extends React.Component {
             });
         };
 
-        this.handleClientAuthToggle = isClientAuthOpen => {
+        this.handleClientAuthToggle = (_event, isClientAuthOpen) => {
             this.setState({
                 isClientAuthOpen
             });
@@ -209,7 +224,7 @@ export class Security extends React.Component {
             });
         };
 
-        this.handleValidateCertToggle = isValidateCertOpen => {
+        this.handleValidateCertToggle = (_event, isValidateCertOpen) => {
             this.setState({
                 isValidateCertOpen
             });
@@ -268,18 +283,33 @@ export class Security extends React.Component {
 
     handleReloadConfig () {
         this.setState({
-            loaded: false
+            loaded: false,
+            configLoaded: false,
+            ciphersLoaded: false,
+            certsLoaded: false,
+            caCertsLoaded: false,
+            csrsLoaded: false,
+            orphanKeysLoaded: false,
+            configLoading: false,
+            ciphersLoading: false,
+            certsLoading: false,
+            caCertsLoading: false,
+            csrsLoading: false,
+            orphanKeysLoading: false,
         }, this.loadSecurityConfig);
     }
 
     loadSupportedCiphers () {
+        this.setState({
+            ciphersLoading: true,
+        });
         const cmd = [
             "dsconf", "-j", "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
             "security", "ciphers", "list", "--supported"
         ];
         log_cmd("loadSupportedCiphers", "Load the security configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     this.setState({
@@ -287,10 +317,10 @@ export class Security extends React.Component {
                     }, this.loadEnabledCiphers);
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -306,18 +336,20 @@ export class Security extends React.Component {
         ];
         log_cmd("loadEnabledCiphers", "Load the security configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     this.setState({
                         enabledCiphers: config.items,
+                        ciphersLoaded: true,
+                        ciphersLoading: false,
                     }, this.loadCerts);
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -327,26 +359,36 @@ export class Security extends React.Component {
     }
 
     loadCACerts () {
+        this.setState({
+            caCertsLoading: true,
+        });
         const cmd = [
             "dsconf", "-j", "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
             "security", "ca-certificate", "list",
         ];
         log_cmd("loadCACerts", "Load CA certificates", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const certs = JSON.parse(content);
+                    const certNames = [];
+                    for (const cert of certs) {
+                        certNames.push(cert.attrs.nickname);
+                    }
                     this.setState(() => (
                         {
                             CACerts: certs,
+                            CACertNames: certNames,
+                            caCertsLoaded: true,
+                            caCertsLoading: false,
                         }), this.loadCSRs
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -356,6 +398,9 @@ export class Security extends React.Component {
     }
 
     loadCerts () {
+        this.setState({
+            certsLoading: true,
+        });
         // Set loaded: true
         const cmd = [
             "dsconf", "-j", "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
@@ -363,7 +408,7 @@ export class Security extends React.Component {
         ];
         log_cmd("loadCerts", "Load certificates", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const certs = JSON.parse(content);
                     const certNames = [];
@@ -374,14 +419,16 @@ export class Security extends React.Component {
                         {
                             serverCerts: certs,
                             serverCertNames: certNames,
+                            certsLoaded: true,
+                            certsLoading: false,
                         }), this.loadCACerts
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -391,26 +438,31 @@ export class Security extends React.Component {
     }
 
     loadCSRs () {
+        this.setState({
+            csrsLoading: true,
+        });
         const cmd = [
             "dsconf", "-j", "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
             "security", "csr", "list",
         ];
         log_cmd("loadCSRs", "Load CSRs", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const csrs = JSON.parse(content);
                     this.setState(() => (
                         {
                             serverCSRs: csrs,
+                            csrsLoaded: true,
+                            csrsLoading: false,
                         }), this.loadOrphanKeys
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -420,28 +472,33 @@ export class Security extends React.Component {
     }
 
     loadOrphanKeys () {
+        this.setState({
+            orphanKeysLoading: true,
+        });
         const cmd = [
             "dsconf", "-j", "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
             "security", "key", "list", "--orphan"
         ];
         log_cmd("loadOrphanKeys", "Load Orphan Keys", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const keys = JSON.parse(content);
                     this.setState(() => (
                         {
                             serverOrphanKeys: keys,
-                            loaded: true
+                            loaded: true,
+                            orphanKeysLoaded: true,
+                            orphanKeysLoading: false,
                         }), this.props.enableTree()
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    if (!errMsg.desc.includes('certutil: no keys found')) {
+                    const errMsg = getApiErrorMessage(err);
+                    if (!errMsg.includes('certutil: no keys found')) {
                         this.props.addNotification(
                             "error",
-                            cockpit.format(_("Error loading Orphan Keys - $0"), errMsg.desc)
+                            cockpit.format(_("Error loading Orphan Keys - $0"), errMsg)
                         );
                     }
                     this.setState({
@@ -458,7 +515,7 @@ export class Security extends React.Component {
         ];
         log_cmd("loadRSAConfig", "Load the RSA configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const nickname = config.items.nssslpersonalityssl;
@@ -466,14 +523,16 @@ export class Security extends React.Component {
                         {
                             nssslpersonalityssl: nickname,
                             _nssslpersonalityssl: nickname,
+                            configLoaded: true,
+                            configLoading: false,
                         }
                     ), this.loadSupportedCiphers);
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -483,13 +542,16 @@ export class Security extends React.Component {
     }
 
     loadSecurityConfig(saving) {
+        this.setState({
+            configLoading: true,
+        });
         const cmd = [
             "dsconf", "-j", "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
             "security", "get"
         ];
         log_cmd("loadSecurityConfig", "Load the security configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.items;
@@ -501,6 +563,7 @@ export class Security extends React.Component {
                     let allowWeak = false;
                     let renegot = true;
                     let checkHostname = false;
+                    let extractPEMFiles = false;
 
                     if ('nstlsallowclientrenegotiation' in config.items) {
                         if (config.items.nstlsallowclientrenegotiation === "off") {
@@ -542,6 +605,11 @@ export class Security extends React.Component {
                             cipherPref = attrs.nsssl3ciphers;
                         }
                     }
+                    if ('nsslapd-extract-pemfiles' in attrs) {
+                        if (attrs['nsslapd-extract-pemfiles'].toLowerCase() === "on") {
+                            extractPEMFiles = true;
+                        }
+                    }
 
                     this.setState(() => (
                         {
@@ -556,6 +624,7 @@ export class Security extends React.Component {
                             allowWeakCipher: allowWeak,
                             cipherPref,
                             nstlsallowclientrenegotiation: renegot,
+                            extractPEMFiles,
                             _nstlsallowclientrenegotiation: renegot,
                             _securityEnabled: secEnabled,
                             _requireSecureBinds: secReqSecBinds,
@@ -566,6 +635,7 @@ export class Security extends React.Component {
                             _sslVersionMin: attrs.sslversionmin,
                             _sslVersionMax: attrs.sslversionmax,
                             _allowWeakCipher: allowWeak,
+                            _extractPEMFiles: extractPEMFiles,
                             disableSaveBtn: true,
                         }
                     ), function() {
@@ -575,10 +645,10 @@ export class Security extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -645,12 +715,12 @@ export class Security extends React.Component {
             ];
             log_cmd("enableSecurity", "Update RSA", rsa_cmd);
             cockpit
-                    .spawn(rsa_cmd, { superuser: true, err: "message" })
+                    .spawn(rsa_cmd, { superuser: "require", err: "message" })
                     .done(() => {
                         this.loadSecurityConfig();
                         log_cmd("enableSecurity", "Enable security", cmd);
                         cockpit
-                                .spawn(cmd, { superuser: true, err: "message" })
+                                .spawn(cmd, { superuser: "require", err: "message" })
                                 .done(() => {
                                     this.loadSecurityConfig();
                                     this.props.addNotification(
@@ -668,10 +738,10 @@ export class Security extends React.Component {
                                     });
                                 })
                                 .fail(err => {
-                                    const errMsg = JSON.parse(err);
-                                    let msg = errMsg.desc;
+                                    const errMsg = getApiErrorMessage(err);
+                                    let msg = errMsg;
                                     if ('info' in errMsg) {
-                                        msg = errMsg.desc + " - " + errMsg.info;
+                                        msg = errMsg + " - " + errMsg.info;
                                     }
                                     this.props.addNotification(
                                         "error",
@@ -684,10 +754,10 @@ export class Security extends React.Component {
                                 });
                     })
                     .fail(err => {
-                        const errMsg = JSON.parse(err);
-                        let msg = errMsg.desc;
+                        const errMsg = getApiErrorMessage(err);
+                        let msg = errMsg;
                         if ('info' in errMsg) {
-                            msg = errMsg.desc + " - " + errMsg.info;
+                            msg = errMsg + " - " + errMsg.info;
                         }
                         this.props.addNotification(
                             "error",
@@ -701,7 +771,7 @@ export class Security extends React.Component {
         } else {
             log_cmd("enableSecurity", "Enable security", cmd);
             cockpit
-                    .spawn(cmd, { superuser: true, err: "message" })
+                    .spawn(cmd, { superuser: "require", err: "message" })
                     .done(() => {
                         this.props.addNotification(
                             "success",
@@ -718,10 +788,10 @@ export class Security extends React.Component {
                         });
                     })
                     .fail(err => {
-                        const errMsg = JSON.parse(err);
-                        let msg = errMsg.desc;
+                        const errMsg = getApiErrorMessage(err);
+                        let msg = errMsg;
                         if ('info' in errMsg) {
-                            msg = errMsg.desc + " - " + errMsg.info;
+                            msg = errMsg + " - " + errMsg.info;
                         }
                         this.props.addNotification(
                             "error",
@@ -745,7 +815,7 @@ export class Security extends React.Component {
         ];
         log_cmd("disableSecurity", "Disable security", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(() => {
                     this.props.addNotification(
                         "success",
@@ -762,10 +832,10 @@ export class Security extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    let msg = errMsg.desc;
+                    const errMsg = getApiErrorMessage(err);
+                    let msg = errMsg;
                     if ('info' in errMsg) {
-                        msg = errMsg.desc + " - " + errMsg.info;
+                        msg = errMsg + " - " + errMsg.info;
                     }
                     this.props.addNotification(
                         "error",
@@ -844,7 +914,13 @@ export class Security extends React.Component {
             }
             cmd.push("--require-secure-authentication=" + val);
         }
-
+        if (this.state._extractPEMFiles !== this.state.extractPEMFiles) {
+            let val = "off";
+            if (this.state.extractPEMFiles) {
+                val = "on";
+            }
+            cmd.push("--extract-pemfiles=" + val);
+        }
         if (this.state._nstlsallowclientrenegotiation !== this.state.nstlsallowclientrenegotiation) {
             let val = "off";
             if (this.state.nstlsallowclientrenegotiation) {
@@ -866,7 +942,7 @@ export class Security extends React.Component {
             });
 
             cockpit
-                    .spawn(rsa_cmd, { superuser: true, err: "message" })
+                    .spawn(rsa_cmd, { superuser: "require", err: "message" })
                     .done(content => {
                         this.loadSecurityConfig();
                         if (cmd.length < 6) {
@@ -884,14 +960,14 @@ export class Security extends React.Component {
                         }
                     })
                     .fail(err => {
-                        const errMsg = JSON.parse(err);
+                        const errMsg = getApiErrorMessage(err);
                         this.loadSecurityConfig();
                         this.setState({
                             saving: false
                         });
-                        let msg = errMsg.desc;
+                        let msg = errMsg;
                         if ('info' in errMsg) {
-                            msg = errMsg.desc + " - " + errMsg.info;
+                            msg = errMsg + " - " + errMsg.info;
                         }
                         this.props.addNotification(
                             "error",
@@ -910,7 +986,7 @@ export class Security extends React.Component {
             });
 
             cockpit
-                    .spawn(cmd, { superuser: true, err: "message" })
+                    .spawn(cmd, { superuser: "require", err: "message" })
                     .done(content => {
                         this.loadSecurityConfig(1);
                         this.props.addNotification(
@@ -926,14 +1002,14 @@ export class Security extends React.Component {
                         });
                     })
                     .fail(err => {
-                        const errMsg = JSON.parse(err);
+                        const errMsg = getApiErrorMessage(err);
                         this.loadSecurityConfig();
                         this.setState({
                             saving: false
                         });
-                        let msg = errMsg.desc;
+                        let msg = errMsg;
                         if ('info' in errMsg) {
-                            msg = errMsg.desc + " - " + errMsg.info;
+                            msg = errMsg + " - " + errMsg.info;
                         }
                         this.props.addNotification(
                             "error",
@@ -976,7 +1052,7 @@ export class Security extends React.Component {
         });
     }
 
-    onSelectToggle = (isExpanded, toggleId) => {
+    onSelectToggle = (_event, isExpanded, toggleId) => {
         this.setState({
             [toggleId]: isExpanded
         });
@@ -991,7 +1067,6 @@ export class Security extends React.Component {
 
     render() {
         let securityPage = "";
-        const serverCert = [this.state.nssslpersonalityssl];
         let saveBtnName = _("Save Settings");
         const extraPrimaryProps = {};
         if (this.state.saving) {
@@ -1006,55 +1081,20 @@ export class Security extends React.Component {
                     <div className="ds-margin-bottom-md">
                         <Form isHorizontal autoComplete="off">
                             <Grid
-                                title={_("The name, or nickname, of the server certificate inthe NSS database the server should use (nsSSLPersonalitySSL).")}
-                            >
-                                <GridItem className="ds-label" span={3}>
-                                    {_("Server Certificate Name")}
-                                </GridItem>
-                                <GridItem span={8}>
-                                    <Select
-                                        variant={SelectVariant.typeahead}
-                                        typeAheadAriaLabel="Type a server certificate nickname"
-                                        onToggle={this.handleServerCertToggle}
-                                        onSelect={this.handleServerCertSelect}
-                                        onClear={this.handleServerCertClear}
-                                        selections={serverCert}
-                                        isOpen={this.state.isServerCertOpen}
-                                        aria-labelledby="typeAhead-server-cert"
-                                        placeholderText={_("Type a sever certificate nickname...")}
-                                        noResultsFoundText={_("There are no matching entries")}
-                                    >
-                                        {this.state.serverCertNames.map((cert, index) => (
-                                            <SelectOption
-                                                key={index}
-                                                value={cert}
-                                            />
-                                        ))}
-                                    </Select>
-                                </GridItem>
-                            </Grid>
-                            <Grid
                                 title={_("The minimum SSL/TLS version the server will accept (sslversionmin).")}
                             >
                                 <GridItem className="ds-label" span={3}>
                                     {_("Minimum TLS Version")}
                                 </GridItem>
                                 <GridItem span={8}>
-                                    <Select
-                                        variant={SelectVariant.single}
-                                        aria-label="Select Input"
-                                        onToggle={this.handleMinSSLToggle}
+                                    <TypeaheadSelect
+                                        selected={this.state.sslVersionMin}
                                         onSelect={this.handleMinSSLSelect}
-                                        selections={this.state.sslVersionMin}
+                                        options={["TLS1.3", "TLS1.2", "TLS1.1", "TLS1.0", "SSL3"]}
                                         isOpen={this.state.isMinSSLOpen}
-                                        aria-labelledby="minssl"
-                                    >
-                                        <SelectOption key={1} value="TLS1.3" />
-                                        <SelectOption key={2} value="TLS1.2" />
-                                        <SelectOption key={3} value="TLS1.1" />
-                                        <SelectOption key={4} value="TLS1.0" />
-                                        <SelectOption key={5} value="SSL3" />
-                                    </Select>
+                                        onToggle={this.handleMinSSLToggle}
+                                        ariaLabel="Select Input"
+                                    />
                                 </GridItem>
                             </Grid>
                             <Grid
@@ -1064,21 +1104,14 @@ export class Security extends React.Component {
                                     {_("Maximum TLS Version")}
                                 </GridItem>
                                 <GridItem span={8}>
-                                    <Select
-                                        variant={SelectVariant.single}
-                                        aria-label="Select Input"
-                                        onToggle={this.handleMaxSSLToggle}
+                                    <TypeaheadSelect
+                                        selected={this.state.sslVersionMax}
                                         onSelect={this.handleMaxSSLSelect}
-                                        selections={this.state.sslVersionMax}
+                                        options={["TLS1.3", "TLS1.2", "TLS1.1", "TLS1.0", "SSL3"]}
                                         isOpen={this.state.isMaxSSLOpen}
-                                        aria-labelledby="maxssl"
-                                    >
-                                        <SelectOption key={1} value="TLS1.3" />
-                                        <SelectOption key={2} value="TLS1.2" />
-                                        <SelectOption key={3} value="TLS1.1" />
-                                        <SelectOption key={4} value="TLS1.0" />
-                                        <SelectOption key={5} value="SSL3" />
-                                    </Select>
+                                        onToggle={this.handleMaxSSLToggle}
+                                        ariaLabel="Select Input"
+                                    />
                                 </GridItem>
                             </Grid>
                             <Grid
@@ -1088,19 +1121,14 @@ export class Security extends React.Component {
                                     {_("Client Authentication")}
                                 </GridItem>
                                 <GridItem span={8}>
-                                    <Select
-                                        variant={SelectVariant.single}
-                                        aria-label="Select Input"
-                                        onToggle={this.handleClientAuthToggle}
+                                    <TypeaheadSelect
+                                        selected={this.state.clientAuth}
                                         onSelect={this.handleClientAuthSelect}
-                                        selections={this.state.clientAuth}
+                                        options={["off", "allowed", "required"]}
                                         isOpen={this.state.isClientAuthOpen}
-                                        aria-labelledby="clientAuth"
-                                    >
-                                        <SelectOption key={1} value="off" />
-                                        <SelectOption key={2} value="allowed" />
-                                        <SelectOption key={3} value="required" />
-                                    </Select>
+                                        onToggle={this.handleClientAuthToggle}
+                                        ariaLabel="Select Input"
+                                    />
                                 </GridItem>
                             </Grid>
                             <Grid
@@ -1110,19 +1138,14 @@ export class Security extends React.Component {
                                     {_("Validate Certificate")}
                                 </GridItem>
                                 <GridItem span={8}>
-                                    <Select
-                                        variant={SelectVariant.single}
-                                        aria-label="Select Input"
-                                        onToggle={this.handleValidateCertToggle}
+                                    <TypeaheadSelect
+                                        selected={this.state.validateCert}
                                         onSelect={this.handleValidateCertSelect}
-                                        selections={this.state.validateCert}
+                                        options={["warn", "on", "off"]}
                                         isOpen={this.state.isValidateCertOpen}
-                                        aria-labelledby="validateCert"
-                                    >
-                                        <SelectOption key={1} value="warn" />
-                                        <SelectOption key={2} value="on" />
-                                        <SelectOption key={3} value="off" />
-                                    </Select>
+                                        onToggle={this.handleValidateCertToggle}
+                                        ariaLabel="Select Input"
+                                    />
                                 </GridItem>
                             </Grid>
                             <Grid
@@ -1138,7 +1161,7 @@ export class Security extends React.Component {
                                         id="secureListenhost"
                                         aria-describedby="horizontal-form-name-helper"
                                         name="server-hostname"
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handleChange(e);
                                         }}
                                     />
@@ -1151,7 +1174,7 @@ export class Security extends React.Component {
                                     <Checkbox
                                         id="requireSecureBinds"
                                         isChecked={this.state.requireSecureBinds}
-                                        onChange={(checked, e) => {
+                                        onChange={(e, checked) => {
                                             this.handleChange(e);
                                         }}
                                         label={_("Require Secure Connections")}
@@ -1165,7 +1188,7 @@ export class Security extends React.Component {
                                     <Checkbox
                                         id="checkHostname"
                                         isChecked={this.state.checkHostname}
-                                        onChange={(checked, e) => {
+                                        onChange={(e, checked) => {
                                             this.handleChange(e);
                                         }}
                                         label={_("Verify Certificate Subject Hostname")}
@@ -1179,7 +1202,7 @@ export class Security extends React.Component {
                                     <Checkbox
                                         id="allowWeakCipher"
                                         isChecked={this.state.allowWeakCipher}
-                                        onChange={(checked, e) => {
+                                        onChange={(e, checked) => {
                                             this.handleChange(e);
                                         }}
                                         title={_("Allow weak ciphers (allowWeakCipher).")}
@@ -1194,11 +1217,25 @@ export class Security extends React.Component {
                                     <Checkbox
                                         id="nstlsallowclientrenegotiation"
                                         isChecked={this.state.nstlsallowclientrenegotiation}
-                                        onChange={(checked, e) => {
+                                        onChange={(e, checked) => {
                                             this.handleChange(e);
                                         }}
                                         title={_("Allow client-initiated renegotiation (nsTLSAllowClientRenegotiation).")}
                                         label={_("Allow Client Renegotiation")}
+                                    />
+                                </GridItem>
+                            </Grid>
+                            <Grid
+                                title={_("At server shutdown extract the server\'s certificates and keys to PEM files (nsslapd-extract-pemfiles).")}
+                            >
+                                <GridItem className="ds-label" span={4}>
+                                    <Checkbox
+                                        id="extractPEMFiles"
+                                        isChecked={this.state.extractPEMFiles}
+                                        onChange={(e, checked) => {
+                                            this.handleChange(e);
+                                        }}
+                                        label={_("Extract PEM Files")}
                                     />
                                 </GridItem>
                             </Grid>
@@ -1227,13 +1264,13 @@ export class Security extends React.Component {
                             <TextContent>
                                 <Text component={TextVariants.h3}>
                                     {_("Security Settings")}
-                                    <FontAwesomeIcon
-                                        size="lg"
-                                        className="ds-left-margin ds-refresh"
-                                        icon={faSyncAlt}
-                                        title={_("Refresh settings")}
+                                    <Button
+                                        variant="plain"
+                                        aria-label={_("Refresh settings")}
                                         onClick={this.handleReloadConfig}
-                                    />
+                                    >
+                                        <SyncAltIcon size="lg" />
+                                    </Button>
                                 </Text>
                             </TextContent>
                         </GridItem>
@@ -1248,7 +1285,7 @@ export class Security extends React.Component {
                                             label={_("Security Enabled")}
                                             labelOff="Security Disabled"
                                             isChecked={this.state.securityEnabled}
-                                            onChange={this.handleSwitchChange}
+                                            onChange={(_event, value) => this.handleSwitchChange(value)}
                                         />
                                     </GridItem>
                                     <hr />
@@ -1264,6 +1301,9 @@ export class Security extends React.Component {
                                     ServerKeys={this.state.serverOrphanKeys}
                                     addNotification={this.props.addNotification}
                                     certDir={this.props.certDir}
+                                    certNicknames={this.state.serverCertNames}
+                                    CACertNicknames={this.state.CACertNames}
+                                    reloadCerts={this.loadCerts}
                                 />
                             </Tab>
                             <Tab eventKey={2} title={<TabTitleText>{_("Cipher Preferences")}</TabTitleText>}>
@@ -1279,19 +1319,94 @@ export class Security extends React.Component {
                                     />
                                 </div>
                             </Tab>
+                            <Tab eventKey={3} title={<TabTitleText>{_("Encryption Modules")}</TabTitleText>}>
+                                <div className="ds-indent ds-tab-table">
+                                    <EncryptionModules
+                                        serverId={this.props.serverId}
+                                        addNotification={this.props.addNotification}
+                                        serverCertNames={this.state.serverCertNames}
+                                    />
+                                </div>
+                            </Tab>
                         </Tabs>
                     </div>
                 </div>
             );
         } else {
             securityPage = (
-                <div className="ds-margin-top-xlg ds-loading-spinner ds-center">
+                <div className="ds-center">
                     <TextContent>
                         <Text component={TextVariants.h3}>
-                            {_("Loading Security Information ...")}
+                            {_("Loading Security Information")}
+                            <Spinner isInline className="ds-left-margin" size="lg" />
                         </Text>
                     </TextContent>
-                    <Spinner className="ds-margin-top-lg" size="lg" />
+                    <ProgressStepper
+                        className="ds-margin-top-xlg"
+                        aria-label="Progress stepper for all the various security related info"
+                        isCenterAligned
+                    >
+                        <ProgressStep
+                            isCurrent={this.state.configLoading}
+                            variant={this.state.configLoaded ? "success" : "pending"}
+                            id="configLoading"
+                            titleId="load all the core security information"
+                            aria-label="Loading the core security information step"
+                            icon={this.state.configLoading ? <InProgressIcon /> : <CheckCircleIcon />}
+                        >
+                            {!this.state.configLoaded ? _("Loading Configuration") : _("Configuration Loaded")}
+                        </ProgressStep>
+                        <ProgressStep
+                            isCurrent={this.state.ciphersLoading}
+                            variant={this.state.ciphersLoaded ? "success" : "pending"}
+                            icon={!this.state.ciphersLoaded ? this.state.ciphersLoading ? <InProgressIcon /> : <PendingIcon /> : <CheckCircleIcon />}
+                            id="cipherLoading"
+                            titleId="load all the cipher information"
+                            aria-label="Loading the cipher information step"
+                        >
+                            {!this.state.ciphersLoaded ? _("Loading Ciphers") : _("Ciphers Loaded")}
+                        </ProgressStep>
+                        <ProgressStep
+                            isCurrent={this.state.certsLoading}
+                            variant={this.state.certsLoaded ? "success" : "pending"}
+                            icon={!this.state.certsLoaded ? this.state.certsLoading ? <InProgressIcon /> : <PendingIcon /> : <CheckCircleIcon />}
+                            id="loadCerts"
+                            titleId="load all the certificate information"
+                            aria-label="Loading the certificate information step"
+                        >
+                            {!this.state.certsLoaded ? _("Loading Certificates") : _("Certificates Loaded")}
+                        </ProgressStep>
+                        <ProgressStep
+                            isCurrent={this.state.caCertsLoading}
+                            variant={this.state.caCertsLoaded ? "success" : "pending"}
+                            icon={!this.state.caCertsLoaded ? this.state.caCertsLoading ? <InProgressIcon /> : <PendingIcon /> : <CheckCircleIcon />}
+                            id="caCertsLoading"
+                            titleId="load all the CA certificate information"
+                            aria-label="Loading the CA certificate information step"
+                        >
+                            {!this.state.caCertsLoaded ? _("Loading CA Certificates") : _("CA Certificates Loaded")}
+                        </ProgressStep>
+                        <ProgressStep
+                            isCurrent={this.state.csrsLoading}
+                            variant={this.state.csrsLoaded ? "success" : "pending"}
+                            icon={!this.state.csrsLoaded ? this.state.csrsLoading ? <InProgressIcon /> : <PendingIcon /> : <CheckCircleIcon />}
+                            id="csrLoading"
+                            titleId="load all the CSR information"
+                            aria-label="Loading the CSR information step"
+                        >
+                            {!this.state.csrsLoaded ? _("Loading CSRs") : _("CSRs Loaded")}
+                        </ProgressStep>
+                        <ProgressStep
+                            isCurrent={this.state.orphanKeysLoading}
+                            variant={this.state.orphanKeysLoaded ? "success" : "pending"}
+                            icon={!this.state.orphanKeysLoaded ? this.state.orphanKeysLoading ? <InProgressIcon /> : <PendingIcon /> : <CheckCircleIcon />}
+                            id="orphanKeysLoading"
+                            titleId="load all the orphan key information"
+                            aria-label="Loading the orphan key information step"
+                        >
+                            {!this.state.orphanKeysLoaded ? _("Loading Orphan Keys") : _("Orphan Keys Loaded")}
+                        </ProgressStep>
+                    </ProgressStepper>
                 </div>
             );
         }

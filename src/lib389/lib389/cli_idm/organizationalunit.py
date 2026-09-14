@@ -34,7 +34,7 @@ def get(inst, basedn, log, args):
     _generic_get(inst, basedn, log.getChild('_generic_get'), MANY, rdn, args)
 
 def get_dn(inst, basedn, log, args):
-    dn = lambda args: _get_arg( args.dn, msg="Enter dn to retrieve")
+    dn = _get_arg( args.dn, msg="Enter dn to retrieve")
     _generic_get_dn(inst, basedn, log.getChild('_generic_get_dn'), MANY, dn, args)
 
 def create(inst, basedn, log, args):
@@ -62,6 +62,8 @@ def create_parser(subparsers):
 
     list_parser = subcommands.add_parser('list', help='list', formatter_class=CustomHelpFormatter)
     list_parser.set_defaults(func=list)
+    list_parser.add_argument('--full-dn', action='store_true',
+                             help="Return the full DN of the entry instead of the RDN value")
 
     get_parser = subcommands.add_parser('get', help='get', formatter_class=CustomHelpFormatter)
     get_parser.set_defaults(func=get)

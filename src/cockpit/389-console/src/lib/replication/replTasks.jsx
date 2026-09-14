@@ -1,6 +1,6 @@
 import cockpit from "cockpit";
 import React from "react";
-import { log_cmd, bad_file_name } from "../tools.jsx";
+import { log_cmd, bad_file_name, getApiErrorMessage } from "../tools.jsx";
 import { RUVTable } from "./replTables.jsx";
 import { ExportCLModal } from "./replModals.jsx";
 import { DoubleConfirmModal } from "../notifications.jsx";
@@ -14,11 +14,7 @@ import {
     TextContent,
     TextVariants,
 } from "@patternfly/react-core";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faSyncAlt
-} from '@fortawesome/free-solid-svg-icons';
-import '@fortawesome/fontawesome-svg-core/styles.css';
+import { SyncAltIcon } from "@patternfly/react-icons";
 
 const _ = cockpit.gettext;
 
@@ -125,7 +121,7 @@ export class ReplRUV extends React.Component {
         });
     }
 
-    onRadioChange(_, e) {
+    onRadioChange(e, _) {
         // Handle the changelog export options
         let defaultCL = false;
         let debugCL = false;
@@ -148,7 +144,7 @@ export class ReplRUV extends React.Component {
 
         log_cmd('cleanRUV', 'Clean the rid', cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.reload(this.props.suffix);
                     this.props.addNotification(
@@ -157,10 +153,10 @@ export class ReplRUV extends React.Component {
                     this.closeConfirmCleanRUV();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to start CleanAllRUV task - $0"), errMsg.desc)
+                        cockpit.format(_("Failed to start CleanAllRUV task - $0"), errMsg)
                     );
                     this.closeConfirmCleanRUV();
                 });
@@ -210,7 +206,7 @@ export class ReplRUV extends React.Component {
 
         log_cmd("importChangelog", "Import relication changelog via LDIF", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -222,10 +218,10 @@ export class ReplRUV extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error importing changelog LDIF - $0"), errMsg.desc)
+                        cockpit.format(_("Error importing changelog LDIF - $0"), errMsg)
                     );
                     this.setState({
                         showConfirmCLImport: false,
@@ -263,7 +259,7 @@ export class ReplRUV extends React.Component {
 
         log_cmd("exportChangelog", "Import relication changelog via LDIF", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -275,10 +271,10 @@ export class ReplRUV extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error importing changelog LDIF - $0"), errMsg.desc)
+                        cockpit.format(_("Error importing changelog LDIF - $0"), errMsg)
                     );
                     this.setState({
                         showCLExport: false,
@@ -361,30 +357,30 @@ export class ReplRUV extends React.Component {
                 <TextContent>
                     <Text component={TextVariants.h3}>
                         {_("Local RUV")}
-                        <FontAwesomeIcon
-                            size="lg"
-                            className="ds-left-margin ds-refresh"
-                            icon={faSyncAlt}
-                            title={_("RRefresh the RUV for this suffixs")}
+                        <Button
+                            variant="plain"
+                            aria-label={_("Refresh the RUV for this suffix")}
                             onClick={() => {
                                 this.props.reload(this.props.suffix);
                             }}
-                        />
+                        >
+                            <SyncAltIcon />
+                        </Button>
                     </Text>
                 </TextContent>
                 {localRUV}
                 <TextContent className="ds-margin-top-xlg">
                     <Text component={TextVariants.h3}>
                         {_("Remote RUV's")}
-                        <FontAwesomeIcon
-                            size="lg"
-                            className="ds-left-margin ds-refresh"
-                            icon={faSyncAlt}
-                            title={_("Refresh the remote RUVs for this suffixs")}
+                        <Button
+                            variant="plain"
+                            aria-label={_("Refresh the remote RUVs for this suffix")}
                             onClick={() => {
                                 this.props.reload(this.props.suffix);
                             }}
-                        />
+                        >
+                            <SyncAltIcon />
+                        </Button>
                     </Text>
                 </TextContent>
                 <div className="ds-left-indent-md">
@@ -460,7 +456,7 @@ export class ReplRUV extends React.Component {
                     checked={this.state.modalChecked}
                     mTitle={_("Initialize Replication Changelog From LDIF")}
                     mMsg={_("Are you sure you want to attempt to initialize the changelog from LDIF?  This will reject all operations during during the initialization.")}
-                    mSpinningMsg={_("Initialzing Replication Change Log ...")}
+                    mSpinningMsg={_("Initializing Replication Change Log ...")}
                     mBtnName={_("Import Changelog LDIF")}
                 />
                 <ExportCLModal

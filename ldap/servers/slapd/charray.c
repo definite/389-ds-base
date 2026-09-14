@@ -354,8 +354,9 @@ slapi_str2charray_ext(char *str, char *brkstr, int allow_dups)
         /* Always copy the first value into the array */
         if ((!allow_dups) && (i != 0)) {
             /* Check for duplicates */
+            size_t len_s = strlen(s);
             for (j = 0; j < i; j++) {
-                if (strncmp(res[j], s, strlen(s)) == 0) {
+                if (len_s == strlen(res[j]) && strncmp(res[j], s, len_s) == 0) {
                     dup_found = 1;
                     break;
                 }
@@ -510,7 +511,7 @@ charray_normdn_add(char ***chararray, char *dn, char *errstr)
     char *normdn = NULL;
     rc = slapi_dn_normalize_ext(dn, 0, &normdn, &len);
     if (rc < 0) {
-        slapi_log_err(SLAPI_LOG_ERR, "charray_normdn_add - Invalid dn: \"%s\" %s\n",
+        slapi_log_err(SLAPI_LOG_ERR, "charray_normdn_add", "Invalid dn: \"%s\" %s\n",
                       dn, errstr ? errstr : "");
         return rc;
     } else if (0 == rc) {

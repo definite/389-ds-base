@@ -16,6 +16,7 @@ import {
     Breadcrumb,
     BreadcrumbItem,
     Button,
+    Icon ,
     Modal,
     ModalVariant,
     Spinner,
@@ -43,12 +44,9 @@ import EditorTableView from './lib/ldap_editor/tableView.jsx';
 import EditorTreeView from './lib/ldap_editor/treeView.jsx';
 import { SearchDatabase } from './lib/ldap_editor/search.jsx';
 import GenericWizard from './lib/ldap_editor/wizards/genericWizard.jsx';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faSyncAlt
-} from '@fortawesome/free-solid-svg-icons';
-import '@fortawesome/fontawesome-svg-core/styles.css';
-import { log_cmd } from "./lib/tools.jsx";
+import { EffectivePwpModal } from './lib/ldap_editor/effectivePwpModal.jsx';
+import { SyncAltIcon } from '@patternfly/react-icons';
+import { log_cmd, getApiErrorMessage } from "./lib/tools.jsx";
 
 const _ = cockpit.gettext;
 
@@ -110,7 +108,29 @@ export class LDAPEditor extends React.Component {
             allObjectclasses: [],
             isConfirmModalOpen: false,
             isTreeViewAction: false,
-            currentRowKey: -1
+            currentRowKey: -1,
+            showPwpModal: false,
+            pwpModalEntryDn: '',
+            pwpModalUserType: '',
+            pwpModalSelector: '',
+        };
+
+        this.handlePwpModalClose = () => {
+            this.setState({
+                showPwpModal: false,
+                pwpModalEntryDn: '',
+                pwpModalUserType: '',
+                pwpModalSelector: '',
+            });
+        };
+
+        this.openPwpModal = (entryDn, userPwpLookup) => {
+            this.setState({
+                showPwpModal: true,
+                pwpModalEntryDn: entryDn,
+                pwpModalUserType: userPwpLookup.userType,
+                pwpModalSelector: userPwpLookup.selector,
+            });
         };
 
         this.handleConfirmModalToggle = () => {
@@ -127,7 +147,7 @@ export class LDAPEditor extends React.Component {
         };
 
         // Actions when user clicks on the Entry Details menu
-        this.onToggleEntryMenu = isOpen => {
+        this.onToggleEntryMenu = (_event, isOpen) => {
             this.setState({
                 entryMenuIsOpen: isOpen
             });
@@ -186,6 +206,17 @@ export class LDAPEditor extends React.Component {
                     operationType: "unlock",
                     isTreeViewAction: true
                 }, () => { this.handleConfirmModalToggle() });
+                return;
+            }
+            if (aTarget.name === ENTRY_MENU.getPwp) {
+                this.setState({
+                    entryMenuIsOpen: false,
+                }, () => {
+                    this.openPwpModal(aTarget.value, {
+                        userType: aTarget.getAttribute('data-user-type'),
+                        selector: aTarget.getAttribute('data-selector'),
+                    });
+                });
                 return;
             }
 
@@ -297,7 +328,7 @@ export class LDAPEditor extends React.Component {
             "-b", entryDn, entryType, operationType, entryDn];
         log_cmd("handleLockUnlockEntry", `${operationType} entry`, cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: 'message' })
+                .spawn(cmd, { superuser: "require", err: 'message' })
                 .done(_ => {
                     this.setState({
                         entryMenuIsOpen: !this.state.entryMenuIsOpen,
@@ -314,15 +345,15 @@ export class LDAPEditor extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     console.error(
                         "handleLockUnlockEntry",
                         `${entryType} ${operationType} operation failed -`,
-                        errMsg.desc
+                        errMsg
                     );
                     this.props.addNotification(
-                        `${errMsg.desc.includes(`is already ${operationType === "unlock" ? "active" : "locked"}`) ? 'warning' : 'error'}`,
-                        `${errMsg.desc}`
+                        `${errMsg.includes(`is already ${operationType === "unlock" ? "active" : "locked"}`) ? 'warning' : 'error'}`,
+                        `${errMsg}`
                     );
                     this.setState({
                         entryMenuIsOpen: !this.state.entryMenuIsOpen,
@@ -351,7 +382,7 @@ export class LDAPEditor extends React.Component {
         ];
         log_cmd("getAttributes", "Get attrs", attr_cmd);
         cockpit
-                .spawn(attr_cmd, { superuser: true, err: "message" })
+                .spawn(attr_cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const attrContent = JSON.parse(content);
                     const attrs = [];
@@ -374,6 +405,14 @@ export class LDAPEditor extends React.Component {
     }
 
     componentDidUpdate(prevProps) {
+        if (this.props.serverId !== prevProps.serverId) {
+            getAllObjectClasses(this.props.serverId, (ocs) => {
+                this.setState({
+                    allObjectclasses: ocs,
+                }, () => { this.getAttributes(this.showSuffixes) });
+            });
+        }
+
         if (this.props.wasActiveList.includes(7)) {
             if (this.state.firstLoad) {
                 this.handleReload(true);
@@ -549,7 +588,9 @@ export class LDAPEditor extends React.Component {
                     entryState: "",
                     isRole: info.isRole,
                     isLockable: info.isLockable,
-                    ldapsubentry: info.ldapsubentry
+                    ldapsubentry: info.ldapsubentry,
+                    isUser: info.isUser,
+                    userPwpLookup: info.userPwpLookup,
                 },
                 {
                     // customRowId: info.parentId + 1,
@@ -637,7 +678,7 @@ export class LDAPEditor extends React.Component {
                     "-b", entryDn, (isRole ? "role" : "account"), "entry-status", entryDn];
                 log_cmd("handleCollapse", "Checking if entry is activated", cmd);
                 cockpit
-                        .spawn(cmd, { superuser: true, err: 'message' })
+                        .spawn(cmd, { superuser: "require", err: 'message' })
                         .done(content => {
                             if ((entryDn !== 'Root DSE') && (entryStateIcon !== "")) {
                                 const status = JSON.parse(content);
@@ -648,12 +689,12 @@ export class LDAPEditor extends React.Component {
                             }
                         })
                         .fail(err => {
-                            const errMsg = JSON.parse(err);
-                            if ((entryDn !== 'Root DSE') && (entryStateIcon !== "") && !(errMsg.desc.includes("Root suffix can't be locked or unlocked"))) {
+                            const errMsg = getApiErrorMessage(err);
+                            if ((entryDn !== 'Root DSE') && (entryStateIcon !== "") && !(errMsg.includes("Root suffix can't be locked or unlocked"))) {
                                 console.error(
                                     "handleCollapse",
                                     `${isRole ? "role" : "account"} account entry-status operation failed`,
-                                    errMsg.desc
+                                    errMsg
                                 );
                                 entryState = _("error: please, check browser logs");
                                 entryStateIcon = <ExclamationCircleIcon className="ds-pf-red-color ct-exclamation-circle" />;
@@ -805,6 +846,7 @@ export class LDAPEditor extends React.Component {
             fullEntry: info.fullEntry, //
             children: numSubValue > 0 ? nodeChildren : null,
             modTime: info.modifyTimestamp,
+            modTimeLocal: info.modifyTimestampLocal,
             // The DN value can also be retrieved from info.fullEntry
             // ( but will require to retrieve the DN line and then split it. Taking a lazy approach here ;-))
             dn: info.dn,
@@ -1074,6 +1116,12 @@ export class LDAPEditor extends React.Component {
                     });
                 }
             },
+            ...(rowData.isUser && rowData.userPwpLookup ? [{
+                title: _("View Password Policy ..."),
+                onClick: () => {
+                    this.openPwpModal(rowData.rawdn, rowData.userPwpLookup);
+                }
+            }] : []),
             {
                 isSeparator: true
             },
@@ -1188,12 +1236,12 @@ export class LDAPEditor extends React.Component {
                                     </BreadcrumbItem>
                                 ))}
                             </Breadcrumb>
-                            <FontAwesomeIcon
-                                className="ds-left-margin ds-refresh"
-                                icon={faSyncAlt}
-                                title={_("Refresh")}
-                                onClick={this.handleReload}
-                            />
+                            <Icon>
+                                <SyncAltIcon
+                                    className="ds-left-margin ds-refresh"
+                                    onClick={this.handleReload}
+                                />
+                            </Icon>
                         </div>
                         <div className={this.state.searching ? "ds-margin-top-xlg ds-center" : "ds-hidden"}>
                             <TextContent>
@@ -1241,6 +1289,15 @@ export class LDAPEditor extends React.Component {
                         suffixDn={this.state.emptyDN}
                         editorLdapServer={this.props.serverId}
                     />}
+                <EffectivePwpModal
+                    isOpen={this.state.showPwpModal}
+                    onClose={this.handlePwpModalClose}
+                    serverId={this.props.serverId}
+                    suffixList={this.state.suffixList}
+                    entryDn={this.state.pwpModalEntryDn}
+                    userType={this.state.pwpModalUserType}
+                    selector={this.state.pwpModalSelector}
+                />
                 <Modal
                     // TODO: Fix confirmation modal formatting and size; add operation to the tables
                     variant={ModalVariant.medium}

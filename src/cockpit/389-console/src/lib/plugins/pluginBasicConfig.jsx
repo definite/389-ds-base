@@ -11,7 +11,7 @@ import {
     TextVariants,
 } from "@patternfly/react-core";
 import PropTypes from "prop-types";
-import { log_cmd } from "../tools.jsx";
+import { log_cmd, getApiErrorMessage } from "../tools.jsx";
 
 const _ = cockpit.gettext;
 
@@ -40,7 +40,7 @@ class PluginBasicConfig extends React.Component {
             isExpanded: false,
         };
 
-        this.handleToggle = (isExpanded) => {
+        this.handleToggle = (_event, isExpanded) => {
             this.setState({
                 isExpanded
             });
@@ -87,7 +87,7 @@ class PluginBasicConfig extends React.Component {
         this.setState({ disableSwitch: true });
         log_cmd("handleSwitchChange", "Switch plugin states from the plugin tab", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     console.info("savePlugin", "Result", content);
                     pluginListHandler();
@@ -97,7 +97,7 @@ class PluginBasicConfig extends React.Component {
                     ];
                     log_cmd("handleSwitchChange", "Get Dynamic Plugins attribute", successCheckCMD);
                     cockpit
-                            .spawn(successCheckCMD, { superuser: true, err: "message" })
+                            .spawn(successCheckCMD, { superuser: "require", err: "message" })
                             .done(content => {
                                 const config = JSON.parse(content);
                                 let dynamicPluginEnabled;
@@ -114,8 +114,9 @@ class PluginBasicConfig extends React.Component {
                                 }
                                 addNotification(
                                     `${!dynamicPluginEnabled ? 'warning' : 'success'}`,
-                                    cockpit.format(_("$0 plugin was successfully $1d."), pluginName, new_status) +
-                                    `${!dynamicPluginEnabled ? _("Please, restart the instance.") : ''}`
+                                    cockpit.format(_("$0 plugin was successfully $1."),
+                                                   pluginName, new_status + "d") +
+                                    `${!dynamicPluginEnabled ? " " + _("Please, restart the instance.") : ''}`
                                 );
                                 toggleLoadingHandler();
                             })
@@ -126,16 +127,17 @@ class PluginBasicConfig extends React.Component {
                                 );
                                 addNotification(
                                     "warning",
-                                    cockpit.format(_("$0 plugin was successfully $1d. Please, restart the instance."), pluginName, new_status)
+                                    cockpit.format(_("$0 plugin was successfully $1. Please, restart the instance."),
+                                                   pluginName, new_status + "d")
                                 );
                                 toggleLoadingHandler();
                             });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     addNotification(
                         "error",
-                        cockpit.format(_("Error during $0 plugin modification - $1"), pluginName, errMsg.desc)
+                        cockpit.format(_("Error during $0 plugin modification - $1"), pluginName, errMsg)
                     );
                     toggleLoadingHandler();
                     this.setState({ disableSwitch: false });
@@ -223,7 +225,7 @@ class PluginBasicConfig extends React.Component {
                                     label={enabled}
                                     labelOff={disabled}
                                     isChecked={this.state.currentPluginEnabled}
-                                    onChange={this.handleSwitchChange}
+                                    onChange={(event, str) => this.handleSwitchChange(event, str)}
                                     isDisabled={disableSwitch}
                                 />
                             </GridItem>
@@ -238,7 +240,7 @@ class PluginBasicConfig extends React.Component {
                     <ExpandableSection
                         className="ds-margin-top-lg"
                         toggleText={this.state.isExpanded ? _("Hide Plugin Details") : _("Show Plugin Details")}
-                        onToggle={this.handleToggle}
+                        onToggle={(event, isOpen) => this.handleToggle(event, isOpen)}
                         isExpanded={this.state.isExpanded}
                     >
                         <Grid className="ds-margin-left">

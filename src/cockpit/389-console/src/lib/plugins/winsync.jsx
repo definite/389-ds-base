@@ -14,7 +14,7 @@ import {
 } from "@patternfly/react-core";
 import PropTypes from "prop-types";
 import PluginBasicConfig from "./pluginBasicConfig.jsx";
-import { log_cmd, valid_dn } from "../tools.jsx";
+import { log_cmd, valid_dn, getApiErrorMessage } from "../tools.jsx";
 
 const _ = cockpit.gettext;
 
@@ -95,7 +95,7 @@ class WinSync extends React.Component {
         log_cmd("handleRunFixup", "Run Member UID task", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -109,10 +109,10 @@ class WinSync extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Fixup task for $0 has failed $1"), this.state.fixupDN, errMsg.desc)
+                        cockpit.format(_("Fixup task for $0 has failed $1"), this.state.fixupDN, errMsg)
                     );
                     this.setState({
                         fixupModalShow: false,
@@ -249,7 +249,7 @@ class WinSync extends React.Component {
 
         log_cmd('handleSavePlugin', 'Update Posix winsync plugin', cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -261,10 +261,10 @@ class WinSync extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to update Posix winsync plugin - $0"), errMsg.desc)
+                        cockpit.format(_("Failed to update Posix winsync plugin - $0"), errMsg)
                     );
                     this.props.pluginListHandler();
                     this.setState({
@@ -339,12 +339,12 @@ class WinSync extends React.Component {
                                     id="fixupDN"
                                     aria-describedby="horizontal-form-name-helper"
                                     name="fixupDN"
-                                    onChange={(str, e) => {
+                                    onChange={(e, str) => {
                                         this.handleModalChange(e);
                                     }}
                                     validated={error.fixupDN ? ValidatedOptions.error : ValidatedOptions.default}
                                 />
-                                <FormHelperText isError isHidden={!error.fixupDN}>
+                                <FormHelperText  >
                                     {_("Value must be a valid DN")}
                                 </FormHelperText>
                             </GridItem>
@@ -360,12 +360,12 @@ class WinSync extends React.Component {
                                     id="fixupFilter"
                                     aria-describedby="horizontal-form-name-helper"
                                     name="fixupFilter"
-                                    onChange={(str, e) => {
+                                    onChange={(e, str) => {
                                         this.handleModalChange(e);
                                     }}
                                     validated={error.fixupFilter ? ValidatedOptions.error : ValidatedOptions.default}
                                 />
-                                <FormHelperText isError isHidden={!error.fixupDN}>
+                                <FormHelperText  >
                                     {_("Enter an LDAP search filter")}
                                 </FormHelperText>
                             </GridItem>
@@ -389,7 +389,7 @@ class WinSync extends React.Component {
                                 <Checkbox
                                     id="posixWinsyncCreateMemberOfTask"
                                     isChecked={posixWinsyncCreateMemberOfTask}
-                                    onChange={(checked, e) => { this.handleFieldChange(e) }}
+                                    onChange={(e, checked) => { this.handleFieldChange(e) }}
                                     label={_("Create MemberOf Task")}
                                 />
                             </GridItem>
@@ -399,7 +399,7 @@ class WinSync extends React.Component {
                                 <Checkbox
                                     id="posixWinsyncLowerCaseUID"
                                     isChecked={posixWinsyncLowerCaseUID}
-                                    onChange={(checked, e) => { this.handleFieldChange(e) }}
+                                    onChange={(e, checked) => { this.handleFieldChange(e) }}
                                     label={_("Lower Case UID")}
                                 />
                             </GridItem>
@@ -409,7 +409,7 @@ class WinSync extends React.Component {
                                 <Checkbox
                                     id="posixWinsyncMapMemberUID"
                                     isChecked={posixWinsyncMapMemberUID}
-                                    onChange={(checked, e) => { this.handleFieldChange(e) }}
+                                    onChange={(e, checked) => { this.handleFieldChange(e) }}
                                     label={_("Map Member UID")}
                                 />
                             </GridItem>
@@ -419,7 +419,7 @@ class WinSync extends React.Component {
                                 <Checkbox
                                     id="posixWinsyncMapNestedGrouping"
                                     isChecked={posixWinsyncMapNestedGrouping}
-                                    onChange={(checked, e) => { this.handleFieldChange(e) }}
+                                    onChange={(e, checked) => { this.handleFieldChange(e) }}
                                     label={_("Map Nested Grouping")}
                                 />
                             </GridItem>
@@ -429,7 +429,7 @@ class WinSync extends React.Component {
                                 <Checkbox
                                     id="posixWinsyncMsSFUSchema"
                                     isChecked={posixWinsyncMsSFUSchema}
-                                    onChange={(checked, e) => { this.handleFieldChange(e) }}
+                                    onChange={(e, checked) => { this.handleFieldChange(e) }}
                                     label={_("Microsoft System Services for Unix 3.0 (msSFU30) schema")}
                                 />
                             </GridItem>

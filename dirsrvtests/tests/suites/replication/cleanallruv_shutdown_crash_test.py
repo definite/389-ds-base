@@ -11,7 +11,7 @@ import pytest
 import os
 import time
 from lib389._constants import DEFAULT_SUFFIX
-from lib389.topologies import topology_m4
+from test389.topologies import topology_m4
 from lib389.tasks import CleanAllRUVTask
 from lib389.replica import ReplicationManager, Replicas
 from lib389.config import CertmapLegacy
@@ -66,10 +66,10 @@ def test_clean_shutdown_crash(topology_m2):
 
     log.info('Creating replication dns')
     services = ServiceAccounts(m1, DEFAULT_SUFFIX)
-    repl_m1 = services.get('%s:%s' % (m1.host, m1.sslport))
+    repl_m1 = services.get(f'{DEFAULT_SUFFIX}:{m1.host}:{m1.sslport}')
     repl_m1.set('nsCertSubjectDN', m1.get_server_tls_subject())
 
-    repl_m2 = services.get('%s:%s' % (m2.host, m2.sslport))
+    repl_m2 = services.get(f'{DEFAULT_SUFFIX}:{m2.host}:{m2.sslport}')
     repl_m2.set('nsCertSubjectDN', m2.get_server_tls_subject())
 
     log.info('Changing auth type')

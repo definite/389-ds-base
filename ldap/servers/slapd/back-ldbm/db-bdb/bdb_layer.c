@@ -1,5 +1,5 @@
 /** BEGIN COPYRIGHT BLOCK
- * Copyright (C) 2023 Red Hat, Inc.
+ * Copyright (C) 2025 Red Hat, Inc.
  * All rights reserved.
  *
  * License: GPL (version 3 or any later version).
@@ -74,6 +74,7 @@ typedef struct
     dbi_dbslist_t *list;
     size_t maxdbs;               /* Number of files */
     size_t nbdbs;                /* Number of files */
+    const char *dbhome;
 } dbi_dbslist_ctx_t;
 
 static int bdb_perf_threadmain(void *param);
@@ -1047,7 +1048,7 @@ bdb_start(struct ldbminfo *li, int dbmode)
     slapi_pal_meminfo *mi = spal_meminfo_get();
     util_cachesize_result result = util_is_cachesize_sane(mi, &(conf->bdb_cachesize));
     if (result == UTIL_CACHESIZE_ERROR) {
-        slapi_log_err(SLAPI_LOG_CRIT, "bdb_start", "Unable to determine if cachesize was valid!!!");
+        slapi_log_err(SLAPI_LOG_CRIT, "bdb_start", "Unable to determine if cachesize was valid!!!\n");
     } else if (result == UTIL_CACHESIZE_REDUCED) {
         /* In some cases we saw this go to 0, prevent this. */
         if (conf->bdb_cachesize < MINCACHESIZE) {
@@ -1563,17 +1564,9 @@ bdb_instance_start(backend *be, int mode)
                     goto errout;
                 } else if (rval & DBVERSION_NEED_DN2RDN) {
                     slapi_log_err(SLAPI_LOG_ERR,
-                                  "bdb_instance_start", "%s is on, while the instance %s is in the DN format. "
-                                                            "Please run dn2rdn to convert the database format.\n",
-                                  CONFIG_ENTRYRDN_SWITCH, inst->inst_name);
-                    slapi_ch_free_string(&dataversion);
-                    return_value = -1;
-                    goto errout;
-                } else if (rval & DBVERSION_NEED_RDN2DN) {
-                    slapi_log_err(SLAPI_LOG_ERR,
-                                  "bdb_instance_start", "%s is off, while the instance %s is in the RDN "
-                                                            "format. Please change the value to on in dse.ldif.\n",
-                                  CONFIG_ENTRYRDN_SWITCH, inst->inst_name);
+                                  "bdb_instance_start", "The instance %s is in the DN format. "
+                                  "Please run dn2rdn to convert the database format.\n",
+                                  inst->inst_name);
                     slapi_ch_free_string(&dataversion);
                     return_value = -1;
                     goto errout;
@@ -1770,7 +1763,7 @@ bdb_instance_start(backend *be, int mode)
      */
     if (inst->inst_nextid > MAXID && !(mode & DBLAYER_EXPORT_MODE)) {
         slapi_log_err(SLAPI_LOG_CRIT, "bdb_instance_start", "Backend '%s' "
-                                                                "has no IDs left. DATABASE MUST BE REBUILT.\n",
+                      "has no IDs left. DATABASE MUST BE REBUILT.\n",
                       be->be_name);
         return 1;
     }
@@ -1783,6 +1776,125 @@ errout:
     if (inst_dirp != inst_dir)
         slapi_ch_free_string(&inst_dirp);
     return return_value;
+}
+
+static int
+bdb_get_page_count(dbi_db_t *db, uint32_t *count)
+{
+    DB_BTREE_STAT *stats = NULL;
+    dbi_txn_t *txn = NULL;
+    int rc;
+
+    rc = ((DB*)db)->stat(db, (DB_TXN*)txn, (void *)&stats, 0);
+    if (rc != 0) {
+        slapi_log_err(SLAPI_LOG_ERR, "bdb_get_page_count",
+                      "Failed to get db statistics: db error - %d %s\n",
+                      rc, db_strerror(rc));
+        rc = DBI_RC_OTHER;
+        *count = 0;
+    } else if (stats == NULL) {
+        slapi_log_err(SLAPI_LOG_INFO, "bdb_get_page_count",
+                      "Failed to get db statistics: stats is NULL, defaulting page count to 0\n");
+        *count = 0;
+    } else {
+        *count = stats->bt_pagecnt;
+    }
+    slapi_ch_free((void **)&stats);
+    return rc;
+}
+
+/*
+ * Get the page count for this backend instance
+ * If any error occurs just return 0
+ */
+uint32_t
+bdb_get_inst_page_count(struct ldbminfo *li, ldbm_instance *inst)
+{
+    if (!inst->inst_id2entry) {
+        /* The backend env was not started - must be server startup
+         * If any error occurs the backend might not be initilaized
+         * so just set 0 for the page count */
+        int return_value = -1;
+        bdb_db_env *mypEnv = NULL;
+        int open_flags = DB_CREATE;
+        dbi_db_t *id2entry_db = NULL;
+        dblayer_private *priv = li->li_dblayer_private;
+        char *id2entry_file = NULL;
+        char *data_directories[2] = {0};
+        char inst_dir[MAXPATHLEN];
+        char *inst_dirp = NULL;
+        bdb_config *conf = (bdb_config *)li->li_dblayer_config;
+        size_t cachesize = DEFAULT_DBCACHE_SIZE;
+
+        return_value = bdb_make_env(&mypEnv, li);
+        mypEnv->bdb_DB_ENV->set_cachesize(mypEnv->bdb_DB_ENV,
+                                          cachesize / GIGABYTE,
+                                          cachesize % GIGABYTE,
+                                          conf->bdb_ncache);
+
+        mypEnv->bdb_openflags = DB_CREATE | DB_INIT_MPOOL | DB_PRIVATE;
+        data_directories[0] = inst->inst_parent_dir_name;
+        bdb_set_data_dir(mypEnv, data_directories);
+
+        inst_dirp = dblayer_get_full_inst_dir(li, inst, inst_dir, MAXPATHLEN);
+        if (inst_dirp && *inst_dirp) {
+            if (bdb_grok_directory(inst_dirp, DBLAYER_DIRECTORY_READWRITE_ACCESS)) {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+
+        if ((mypEnv->bdb_DB_ENV->open)(mypEnv->bdb_DB_ENV,
+                                       inst_dirp,
+                                       mypEnv->bdb_openflags,
+                                       priv->dblayer_file_mode))
+        {
+            bdb_free_env((void **)&mypEnv);
+            if (inst_dirp != inst_dir) {
+                slapi_ch_free_string(&inst_dirp);
+            }
+            return 0;
+        }
+
+        if (dbbdb_create_db_for_open(inst->inst_be,
+                                     "bdb_instance_start",
+                                     open_flags,
+                                     (DB**)&id2entry_db,
+                                     mypEnv->bdb_DB_ENV))
+
+        {
+            mypEnv->bdb_DB_ENV->close(mypEnv->bdb_DB_ENV, 0);
+            bdb_free_env((void **)&mypEnv);
+            return 0;
+        }
+        id2entry_file = slapi_ch_smprintf("%s/%s", inst->inst_dir_name,
+                                          ID2ENTRY LDBM_FILENAME_SUFFIX);
+        DB_OPEN(mypEnv->bdb_openflags,
+                (DB *)id2entry_db, NULL /* txnid */, id2entry_file, NULL, DB_BTREE,
+                open_flags, priv->dblayer_file_mode, return_value);
+        slapi_ch_free_string(&id2entry_file);
+
+        if (return_value == 0) {
+            /*
+             * Ok, now we can grab the actual page count
+             */
+            bdb_get_page_count(id2entry_db, &inst->inst_page_count);
+        }
+
+        /* Done, close this pEnv */
+        ((DB *)id2entry_db)->close((DB *)id2entry_db, 0);
+        mypEnv->bdb_DB_ENV->close(mypEnv->bdb_DB_ENV, 0);
+        bdb_free_env((void **)&mypEnv);
+
+        if (inst_dirp != inst_dir) {
+            slapi_ch_free_string(&inst_dirp);
+        }
+    } else {
+        /* Backend env already started, just grab the page count */
+        bdb_get_page_count(inst->inst_id2entry, &inst->inst_page_count);
+    }
+    return inst->inst_page_count;
 }
 
 /*
@@ -2034,13 +2146,19 @@ bdb_pre_close(struct ldbminfo *li)
     conf = (bdb_config *)li->li_dblayer_config;
     bdb_db_env *pEnv = (bdb_db_env *)priv->dblayer_env;
 
-    if (conf->bdb_stop_threads || !pEnv) /* already stopped.  do nothing... */
+    if (pEnv == NULL) {
         return;
+    }
+
+    pthread_mutex_lock(&pEnv->bdb_thread_count_lock);
+
+    if (conf->bdb_stop_threads) {
+        /* already stopped.  do nothing... */
+        goto timeout_escape;
+    }
 
     /* first, see if there are any housekeeping threads running */
-    pthread_mutex_lock(&pEnv->bdb_thread_count_lock);
     threadcount = pEnv->bdb_thread_count;
-    pthread_mutex_unlock(&pEnv->bdb_thread_count_lock);
 
     if (threadcount) {
         PRIntervalTime cvwaittime = PR_MillisecondsToInterval(DBLAYER_SLEEP_INTERVAL * 100);
@@ -2048,7 +2166,7 @@ bdb_pre_close(struct ldbminfo *li)
         /* Print handy-dandy log message */
         slapi_log_err(SLAPI_LOG_INFO, "bdb_pre_close", "Waiting for %d database threads to stop\n",
                       threadcount);
-        pthread_mutex_lock(&pEnv->bdb_thread_count_lock);
+
         /* Tell them to stop - we wait until the last possible moment to invoke
            this.  If we do this much sooner than this, we could find ourselves
            in a situation where the threads see the stop_threads and exit before
@@ -2080,7 +2198,7 @@ bdb_pre_close(struct ldbminfo *li)
                 /* else just a spurious interrupt */
             }
         }
-        pthread_mutex_unlock(&pEnv->bdb_thread_count_lock);
+
         if (timedout) {
             slapi_log_err(SLAPI_LOG_ERR,
                           "bdb_pre_close", "Timeout after [%d] milliseconds; leave %d database thread(s)...\n",
@@ -2090,7 +2208,9 @@ bdb_pre_close(struct ldbminfo *li)
         }
     }
     slapi_log_err(SLAPI_LOG_INFO, "bdb_pre_close", "All database threads now stopped\n");
+
 timeout_escape:
+    pthread_mutex_unlock(&pEnv->bdb_thread_count_lock);
     return;
 }
 
@@ -2206,6 +2326,7 @@ bdb_remove_env(struct ldbminfo *li)
     }
     if (NULL == li) {
         slapi_log_err(SLAPI_LOG_ERR, "bdb_remove_env", "No ldbm info is given\n");
+        slapi_ch_free((void **)&env);
         return -1;
     }
 
@@ -2215,10 +2336,11 @@ bdb_remove_env(struct ldbminfo *li)
         if (rc) {
             slapi_log_err(SLAPI_LOG_ERR,
                           "bdb_remove_env", "Failed to remove DB environment files. "
-                                                "Please remove %s/__db.00# (# is 1 through 6)\n",
+                          "Please remove %s/__db.00# (# is 1 through 6)\n",
                           home_dir);
         }
     }
+    slapi_ch_free((void **)&env);
     return rc;
 }
 
@@ -2718,11 +2840,19 @@ bdb_txn_begin(struct ldbminfo *li, back_txnid parent_txn, back_txn *txn, PRBool 
         txn->back_txn_txn = NULL;
     }
 
-    if (conf->bdb_enable_transactions) {
+    bdb_db_env *pEnv = (bdb_db_env *)priv->dblayer_env;
+
+    /*
+     * Check both config and actual environment capabilities before starting a transaction.
+     * During offline import, the environment is created without DB_INIT_TXN even though
+     * bdb_enable_transactions may be true in config. We use bdb_openflags (cached at
+     * environment open time) rather than get_open_flags() to safely handle cases where
+     * the environment handle exists but may not be fully opened yet.
+     */
+    if (pEnv && pEnv->bdb_DB_ENV && conf->bdb_enable_transactions &&
+        (pEnv->bdb_openflags & DB_INIT_TXN)) {
         int txn_begin_flags;
         DB_TXN *new_txn_back_txn_txn = NULL;
-
-        bdb_db_env *pEnv = (bdb_db_env *)priv->dblayer_env;
         if (use_lock)
             slapi_rwlock_rdlock(pEnv->bdb_env_lock);
         if (!parent_txn) {
@@ -2986,6 +3116,7 @@ bdb_start_perf_thread(struct ldbminfo *li)
 static int
 bdb_perf_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-perf");
     struct ldbminfo *li = NULL;
 
     PR_ASSERT(NULL != param);
@@ -3036,6 +3167,7 @@ bdb_start_locks_monitoring_thread(struct ldbminfo *li)
 static int
 bdb_locks_monitoring_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-lock-mon");
     int ret = 0;
     uint64_t current_locks = 0;
     uint64_t max_locks = 0;
@@ -3246,6 +3378,7 @@ bdb_txn_test_init_cfg(bdb_txn_test_cfg *cfg)
 static int
 bdb_txn_test_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-txn-test");
     struct ldbminfo *li = NULL;
     Object *inst_obj;
     int rc = 0;
@@ -3544,6 +3677,7 @@ bdb_start_txn_test_thread(struct ldbminfo *li)
 static int
 bdb_deadlock_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-deadlock");
     int rval = -1;
     struct ldbminfo *li = NULL;
     PRIntervalTime interval; /*NSPR timeout stuffy*/
@@ -3641,6 +3775,7 @@ bdb_start_log_flush_thread(struct ldbminfo *li)
 static int
 bdb_log_flush_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-logflush");
     PRIntervalTime interval_flush, interval_def;
     PRIntervalTime last_flush = 0;
     int i;
@@ -3791,6 +3926,24 @@ bdb_compact(time_t when, void *arg)
     ldbm_instance *inst;
     DB *db = NULL;
     int rc = 0;
+    time_t compactdb_interval;
+
+    /*
+     * The interval may have been set to 0 (compaction disabled) after
+     * this one-shot event was already queued via slapi_eq_once_rel().
+     * Re-check the live config before doing any real work.
+     */
+    PR_Lock(li->li_config_mutex);
+    compactdb_interval = (time_t)BDB_CONFIG(li)->bdb_compactdb_interval;
+    PR_Unlock(li->li_config_mutex);
+
+    if (compactdb_interval == 0) {
+        slapi_log_err(SLAPI_LOG_DEBUG, "bdb_compact",
+                      "database compaction skipped - auto-compaction is "
+                      "disabled (nsslapd-db-compactdb-interval: 0)\n");
+        compaction_scheduled = PR_FALSE;
+        return;
+    }
 
     for (inst_obj = objset_first_obj(li->li_instance_set);
          inst_obj;
@@ -3804,27 +3957,10 @@ bdb_compact(time_t when, void *arg)
         slapi_log_err(SLAPI_LOG_NOTICE, "bdb_compact", "Compacting DB start: %s\n",
                       inst->inst_name);
 
-        rc = bdb_db_compact_one_db(db, inst);
-        if (rc) {
-            slapi_log_err(SLAPI_LOG_ERR, "bdb_compact",
-                          "Failed to compact id2entry for %s; db error - %d %s\n",
-                          inst->inst_name, rc, db_strerror(rc));
-            break;
-        }
-
         /* Time to compact the DB's */
         bdb_force_checkpoint(li);
         bdb_do_compact(li, PR_FALSE);
         bdb_force_checkpoint(li);
-
-        /* Now reset the timer and compacting flag */
-        rc = bdb_db_compact_one_db(db, inst);
-        if (rc) {
-            slapi_log_err(SLAPI_LOG_ERR, "bdb_compact",
-                          "Failed to compact for %s; db error - %d %s\n",
-                          inst->inst_name, rc, db_strerror(rc));
-            break;
-        }
     }
     compaction_scheduled = PR_FALSE;
 }
@@ -3851,11 +3987,47 @@ bdb_start_checkpoint_thread(struct ldbminfo *li)
 }
 
 /*
+ * Write the compaction interval start time value to the config. We do this as
+ * a delayed event because at server startup the checkpoint thread can run
+ * before all the plugins have been started which causes invalid memory reads.
+ */
+static void
+bdb_write_compact_start_time(time_t when, void *arg)
+{
+    struct ldbminfo *li = (struct ldbminfo *)arg;
+    Slapi_PBlock *mod_pb = slapi_pblock_new();
+    Slapi_Mods smods;
+    char start_time_str[20] = {0};
+    int32_t rval = 0;
+    uint64_t start_time = slapi_current_utc_time();
+
+    PR_snprintf(start_time_str, sizeof(start_time_str), "%ld", start_time);
+    slapi_mods_init(&smods, 0);
+    slapi_mods_add_string(&smods, LDAP_MOD_REPLACE,
+                          CONFIG_DB_COMPACTDB_STARTTIME,
+                          start_time_str);
+
+    slapi_modify_internal_set_pb(mod_pb,
+                                 "cn=bdb,cn=config,cn=ldbm database,cn=plugins,cn=config",
+                                 slapi_mods_get_ldapmods_byref(&smods),
+                                 NULL, NULL, li->li_identity, 0);
+    slapi_modify_internal_pb(mod_pb);
+    slapi_pblock_get(mod_pb, SLAPI_PLUGIN_INTOP_RESULT, &rval);
+    if (rval != LDAP_SUCCESS) {
+        slapi_log_err(SLAPI_LOG_ERR, "bdb_write_compact_start_time",
+                      "failed to modify config_entry, err=%d\n", rval);
+    }
+    slapi_pblock_destroy(mod_pb);
+    slapi_mods_done(&smods);
+}
+
+/*
  * checkpoint thread -- borrow the timing for compacting id2entry, and eventually changelog, as well.
  */
 static int
 bdb_checkpoint_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-chkpoint");
     PRIntervalTime interval;
     int rval = -1;
     struct ldbminfo *li = NULL;
@@ -3869,8 +4041,10 @@ bdb_checkpoint_threadmain(void *param)
     time_t compactdb_interval_update = 0;
     time_t checkpoint_interval_update = 0;
     time_t compactdb_interval = 0;
+    time_t compactdb_interval_orig = 0;
     time_t checkpoint_interval = 0;
-    int32_t compactdb_time = 0;
+    uint64_t compactdb_time = 0;
+    uint64_t compactdb_start_time = 0;
 
     PR_ASSERT(NULL != param);
     li = (struct ldbminfo *)param;
@@ -3894,10 +4068,35 @@ bdb_checkpoint_threadmain(void *param)
 
     PR_Lock(li->li_config_mutex);
     checkpoint_interval = (time_t)BDB_CONFIG(li)->bdb_checkpoint_interval;
-    compactdb_interval = (time_t)BDB_CONFIG(li)->bdb_compactdb_interval;
+    compactdb_interval_orig = compactdb_interval = (time_t)BDB_CONFIG(li)->bdb_compactdb_interval;
+    compactdb_start_time = (time_t)BDB_CONFIG(li)->bdb_compactdb_starttime;
     penv = (bdb_db_env *)priv->dblayer_env;
     debug_checkpointing = BDB_CONFIG(li)->bdb_debug_checkpointing;
     PR_Unlock(li->li_config_mutex);
+
+    if (compactdb_start_time == 0) {
+        /* Ok, we don't have a start time set, get the time and write it to
+         * the config */
+        compactdb_start_time = slapi_current_utc_time();
+        slapi_eq_once_rel(bdb_write_compact_start_time, (void *)li,
+                          slapi_current_rel_time_t() + 3);
+    } else {
+        /* We only adjust the compact interval, used for the timer, if we are
+         * already had a preexisting time set.  This way regardless if we
+         * restart the server we will still compact at the expected interval */
+        time_t curr_time = slapi_current_utc_time();
+        if (compactdb_interval > 0) {
+            if (compactdb_interval < (curr_time - compactdb_start_time)) {
+                /* the interval has now been passed, trigger compaction right away */
+                compactdb_interval = 1;
+            } else {
+                compactdb_interval = compactdb_interval - (curr_time - compactdb_start_time);
+            }
+        }
+        /* else: compaction is disabled (interval == 0) - leave compactdb_interval
+         * at 0. The main loop re-checks the live config every iteration and
+         * gates scheduling on that, independent of compactdb_expire's state. */
+    }
 
     /* assumes bdb_force_checkpoint worked */
     /*
@@ -3914,9 +4113,21 @@ bdb_checkpoint_threadmain(void *param)
         compactdb_interval_update = (time_t)BDB_CONFIG(li)->bdb_compactdb_interval;
         PR_Unlock(li->li_config_mutex);
 
-        if (compactdb_interval_update != compactdb_interval) {
+        if (compactdb_interval_update != compactdb_interval_orig) {
             /* Compact interval was changed, so reset the timer */
-            slapi_timespec_expire_at(compactdb_interval_update, &compactdb_expire);
+            time_t curr_time = slapi_current_utc_time();
+            if (compactdb_interval_update > 0) {
+                if (compactdb_interval_update < (curr_time - compactdb_start_time)) {
+                    /* the new interval has now been passed, trigger compaction right away */
+                    compactdb_interval = 1;
+                } else {
+                    compactdb_interval = compactdb_interval_update - (curr_time - compactdb_start_time);
+                }
+                slapi_timespec_expire_at(compactdb_interval, &compactdb_expire);
+            }
+            /* else: compactdb_interval_update is 0 - skip the timer adjustment.
+             * The scheduling block below also checks compactdb_interval_update
+             * and will short-circuit before compactdb_expire is ever consulted. */
         }
 
         /* Sleep for a while ...
@@ -3942,16 +4153,16 @@ bdb_checkpoint_threadmain(void *param)
 
             /* now checkpoint */
             bdb_checkpoint_debug_message(debug_checkpointing,
-                                     "bdb_checkpoint_threadmain - Starting checkpoint\n");
+                                         "bdb_checkpoint_threadmain - Starting checkpoint\n");
             rval = bdb_txn_checkpoint(li, (bdb_db_env *)priv->dblayer_env,
-                                          PR_TRUE, PR_FALSE);
+                                      PR_TRUE, PR_FALSE);
             bdb_checkpoint_debug_message(debug_checkpointing,
                                      "bdb_checkpoint_threadmain - Checkpoint Done\n");
             if (rval != 0) {
                 /* bad error */
                 slapi_log_err(SLAPI_LOG_CRIT,
                               "bdb_checkpoint_threadmain", "Serious Error---Failed to checkpoint database, "
-                                                       "err=%d (%s)\n",
+                              "err=%d (%s)\n",
                               rval, dblayer_strerror(rval));
                 if (LDBM_OS_ERR_IS_DISKFULL(rval)) {
                     operation_out_of_disk_space();
@@ -3976,7 +4187,7 @@ bdb_checkpoint_threadmain(void *param)
                         PR_snprintf(new_filename, sizeof(new_filename),
                                     "%s.old", *listp);
                         bdb_checkpoint_debug_message(debug_checkpointing,
-                                                 "Renaming %s -> %s\n", *listp, new_filename);
+                                                     "Renaming %s -> %s\n", *listp, new_filename);
                         if (rename(*listp, new_filename) != 0) {
                             slapi_log_err(SLAPI_LOG_ERR, "bdb_checkpoint_threadmain", "Failed to rename log (%s) to (%s)\n",
                                           *listp, new_filename);
@@ -3994,28 +4205,44 @@ bdb_checkpoint_threadmain(void *param)
 
         /* Compacting DB borrowing the timing of the log flush */
 
-        /*
-         * Remember that if compactdb_interval is 0, timer_expired can
-         * never occur unless the value in compactdb_interval changes.
-         *
-         * this could have been a bug in fact, where compactdb_interval
-         * was 0, if you change while running it would never take effect ....
-         */
-        if (compactdb_interval_update != compactdb_interval ||
+        if (compactdb_interval_update == 0) {
+            /*
+             * Compaction is disabled. Keep compactdb_interval_orig in sync
+             * so that a future transition back to a nonzero interval is
+             * correctly detected by the != comparison below and takes
+             * effect immediately without requiring a server restart.
+             */
+            compactdb_interval_orig = 0;
+        } else if (compactdb_interval_update != compactdb_interval_orig ||
             (slapi_timespec_expire_check(&compactdb_expire) == TIMER_EXPIRED && !compaction_scheduled))
         {
-            /* Get the time in second when the compaction should occur */
+            time_t scheduled_time;
+            struct tm *time_info;
+            char buffer[80];
+
+            /* Get the time in seconds when the compaction should occur */
             PR_Lock(li->li_config_mutex);
             compactdb_time = bdb_get_tod_expiration((char *)BDB_CONFIG(li)->bdb_compactdb_time);
             PR_Unlock(li->li_config_mutex);
+
+            scheduled_time = slapi_current_utc_time() + compactdb_time;
+            time_info = localtime(&scheduled_time);
+            strftime(buffer, 80, "%Y-%m-%d %H:%M:%S", time_info);
+            slapi_log_err(SLAPI_LOG_NOTICE, "bdb_checkpoint_threadmain",
+                          "database compaction scheduled for: %s\n",
+                          buffer);
 
             /* Start compaction event */
             compaction_scheduled = PR_TRUE;
             slapi_eq_once_rel(bdb_compact, (void *)li, slapi_current_rel_time_t() + compactdb_time);
 
-            /* reset interval timer */
-            compactdb_interval = compactdb_interval_update;
-            slapi_timespec_expire_at(compactdb_interval, &compactdb_expire);
+            /* reset compact interval timer */
+            compactdb_interval_orig = compactdb_interval_update;
+            slapi_timespec_expire_at(compactdb_interval_update, &compactdb_expire);
+            /* lastly update the config */
+            compactdb_start_time = slapi_current_utc_time();
+            slapi_eq_once_rel(bdb_write_compact_start_time, (void *)li,
+                              slapi_current_rel_time_t() + 3);
         }
     }
     slapi_log_err(SLAPI_LOG_TRACE, "bdb_checkpoint_threadmain", "Check point before leaving\n");
@@ -4056,6 +4283,7 @@ bdb_start_trickle_thread(struct ldbminfo *li)
 static int
 bdb_trickle_threadmain(void *param)
 {
+    slapi_set_thread_name("bdb-trickle");
     PRIntervalTime interval; /*NSPR timeout stuffy*/
     int rval = -1;
     dblayer_private *priv = NULL;
@@ -5591,6 +5819,28 @@ bdb_restore(struct ldbminfo *li, char *src_dir, Slapi_Task *task)
     /* Otherwise use the src_dir from the caller */
     real_src_dir = src_dir;
 
+    /* Lets remove existing log files before copying the new ones (See issue #6386) */
+    prefix = BDB_CONFIG(li)->bdb_log_directory;
+    if (prefix == NULL) {
+        prefix = home_dir;
+    }
+    dirhandle = PR_OpenDir(prefix);
+    if (NULL != dirhandle) {
+        while (NULL !=
+               (direntry = PR_ReadDir(dirhandle, PR_SKIP_DOT | PR_SKIP_DOT_DOT))) {
+            if (NULL == direntry->name) {
+                /* NSPR doesn't behave like the docs say it should */
+                break;
+            }
+            if (bdb_is_logfilename(direntry->name)) {
+                PR_snprintf(filename1, sizeof(filename2), "%s/%s",
+                            prefix, direntry->name);
+                unlink(filename1);
+            }
+        }
+    }
+    PR_CloseDir(dirhandle);
+
     /* We copy the files over from the staging area */
     /* We want to treat the logfiles specially: if there's
      * a log file directory configured, copy the logfiles there
@@ -5711,16 +5961,9 @@ bdb_restore(struct ldbminfo *li, char *src_dir, Slapi_Task *task)
         dbmode = DBLAYER_RESTORE_MODE;
     } else if (action & DBVERSION_NEED_DN2RDN) {
         slapi_log_err(SLAPI_LOG_ERR,
-                      "bdb_restore", "%s is on, while the instance %s is in the DN format. "
-                                         "Please run dn2rdn to convert the database format.\n",
-                      CONFIG_ENTRYRDN_SWITCH, (inst != NULL) ? inst->inst_name : "<Null>");
-        return_value = -1;
-        goto error_out;
-    } else if (action & DBVERSION_NEED_RDN2DN) {
-        slapi_log_err(SLAPI_LOG_ERR,
-                      "bdb_restore", "%s is off, while the instance %s is in the RDN format. "
-                                         "Please change the value to on in dse.ldif.\n",
-                      CONFIG_ENTRYRDN_SWITCH, (inst != NULL) ? inst->inst_name : "<Null>");
+                      "bdb_restore", "The instance %s is in the DN format. "
+                      "Please run dn2rdn to convert the database format.\n",
+                      (inst != NULL) ? inst->inst_name : "<Null>");
         return_value = -1;
         goto error_out;
     } else {
@@ -5794,8 +6037,16 @@ bdb_import_file_name(ldbm_instance *inst)
 static char *
 bdb_restore_file_name(struct ldbminfo *li)
 {
-    char *fname = slapi_ch_smprintf("%s/../.restore", li->li_directory);
-
+    char *pt = strrchr(li->li_directory, '/');
+    char *fname =  NULL;
+    if (pt == NULL) {
+        fname = slapi_ch_strdup(".restore");
+    } else {
+        size_t len = pt-li->li_directory;
+        fname = slapi_ch_malloc(len+10);
+        strncpy(fname, li->li_directory, len);
+        strcpy(fname+len, "/.restore");
+    }
     return fname;
 }
 
@@ -6159,10 +6410,6 @@ bdb_get_info(Slapi_Backend *be, int cmd, void **info)
         }
         break;
     }
-    case BACK_INFO_IS_ENTRYRDN: {
-        *(int *)info = entryrdn_get_switch();
-        break;
-    }
     case BACK_INFO_INDEX_KEY : {
         rc = get_suffix_key(be, (struct _back_info_index_key *)info);
         break;
@@ -6263,6 +6510,7 @@ bdb_back_ctrl(Slapi_Backend *be, int cmd, void *info)
                 db->close(db, 0);
                 rc = bdb_db_remove_ex((bdb_db_env *)priv->dblayer_env, path, NULL, PR_TRUE);
                 inst->inst_changelog = NULL;
+                slapi_ch_free_string(&path);
                 slapi_ch_free_string(&instancedir);
             }
         }
@@ -6736,7 +6984,27 @@ int bdb_public_db_op(dbi_db_t *db,  dbi_txn_t *txn, dbi_op_t op, dbi_val_t *key,
 int bdb_public_new_cursor(dbi_db_t *db,  dbi_cursor_t *cursor)
 {
     DB *bdb_db = (DB*)db;
-    return bdb_map_error(__FUNCTION__, bdb_db->cursor(bdb_db, (DB_TXN*)cursor->txn, (DBC**)&cursor->cur, 0));
+    DB_TXN *txn = (DB_TXN*)cursor->txn;
+
+    /*
+     * Verify the database's environment actually supports transactions.
+     * During import, databases are opened with a private environment that
+     * lacks DB_INIT_TXN. If we try to use a transaction from the main
+     * environment with a database from the import environment, BDB will fail.
+     * Clear the txn if the database's environment doesn't support transactions.
+     */
+    if (txn != NULL) {
+#ifdef WITH_LIBBDB_RO
+        DB_ENV *dbenv = bdb_db->env;
+#else
+        DB_ENV *dbenv = bdb_db->dbenv;
+#endif
+        if (dbenv && !bdb_uses_transactions(dbenv)) {
+            txn = NULL;
+        }
+    }
+
+    return bdb_map_error(__FUNCTION__, bdb_db->cursor(bdb_db, txn, (DBC**)&cursor->cur, 0));
 }
 
 int bdb_public_value_free(dbi_val_t *data)
@@ -6851,11 +7119,17 @@ bdb_get_entries_count(dbi_db_t *db, dbi_txn_t *txn, int *count)
     rc = ((DB*)db)->stat(db, (DB_TXN*)txn, (void *)&stats, 0);
     if (rc != 0) {
         slapi_log_err(SLAPI_LOG_ERR, "bdb_get_entries_count",
-                      "Failed to get bd statistics: db error - %d %s\n",
+                      "Failed to get db statistics: db error - %d %s\n",
                       rc, db_strerror(rc));
         rc = DBI_RC_OTHER;
+        *count = 0;
+    } else if (stats == NULL) {
+        slapi_log_err(SLAPI_LOG_INFO, "bdb_get_entries_count",
+                      "Failed to get db statistics: stats is NULL, defaulting entries count to 0\n");
+        *count = 0;
+    } else {
+        *count = stats->bt_ndata;
     }
-    *count = rc ? 0 : stats->bt_ndata;
     slapi_ch_free((void **)&stats);
     return rc;
 }
@@ -6891,45 +7165,64 @@ bdb_public_private_open(backend *be, const char *db_filename, int rw, dbi_env_t 
     bdb_config *conf = (bdb_config *)li->li_dblayer_config;
     bdb_db_env **ppEnv = (bdb_db_env**)&priv->dblayer_env;
     char dbhome[MAXPATHLEN];
+    bdb_db_env *pEnv = NULL;
     DB_ENV *bdb_env = NULL;
     DB *bdb_db = NULL;
     struct stat st = {0};
     int flags;
     int rc;
 
-    /* Either filename is an existing regular file
-     *  or the "home" directory where txn logs are
-     */
+    slapi_ch_free_string(&conf->bdb_dbhome_directory);
+    if (li->li_directory == NULL) {
+        /* Either filename is an existing regular file
+         *  or the "home" directory where txn logs are
+         */
 
-    PL_strncpyz(dbhome, db_filename, MAXPATHLEN);
-    if (stat(dbhome, &st) == 0) {
-        if (S_ISDIR(st.st_mode)) {
-            li->li_directory = slapi_ch_strdup(dbhome);
-        } else if (S_ISREG(st.st_mode)) {
-            getdir(dbhome, NULL);
-            li->li_directory = slapi_ch_strdup(db_filename);
-            getdir(dbhome, NULL);
+        PL_strncpyz(dbhome, db_filename, MAXPATHLEN);
+        if (stat(dbhome, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                li->li_directory = slapi_ch_strdup(dbhome);
+            } else if (S_ISREG(st.st_mode)) {
+                getdir(dbhome, NULL);
+                li->li_directory = slapi_ch_strdup(db_filename);
+                getdir(dbhome, NULL);
+            } else {
+                fprintf(stderr, "bdb_public_private_open: Unable to determine dbhome from %s\n", db_filename);
+                return EINVAL;
+            }
         } else {
-            fprintf(stderr, "bdb_public_private_open: Unable to determine dbhome from %s\n", db_filename);
-            return EINVAL;
+            getdir(dbhome, NULL);
+            li->li_directory = slapi_ch_strdup(dbhome);
+            getdir(dbhome, NULL);
+            if (stat(dbhome, &st) || ((st.st_mode & S_IFMT) != S_IFDIR)) {
+                fprintf(stderr, "bdb_public_private_open: Unable to determine dbhome from %s\n", db_filename);
+                return EINVAL;
+            }
         }
+        conf->bdb_dbhome_directory = slapi_ch_strdup(dbhome);
     } else {
-        getdir(dbhome, NULL);
-        li->li_directory = slapi_ch_strdup(dbhome);
-        getdir(dbhome, NULL);
-        if (stat(dbhome, &st) || ((st.st_mode & S_IFMT) != S_IFDIR)) {
-            fprintf(stderr, "bdb_public_private_open: Unable to determine dbhome from %s\n", db_filename);
-            return EINVAL;
+        conf->bdb_dbhome_directory = slapi_ch_strdup(li->li_directory);
+        if (strcmp(li->li_directory, db_filename)) {
+            getdir(conf->bdb_dbhome_directory, NULL);
         }
     }
+
     li->li_config_mutex = PR_NewLock();
-    conf->bdb_dbhome_directory = slapi_ch_strdup(dbhome);
     if (rw) {
         /* Setup a fully transacted environment */
         priv->dblayer_env = NULL;
-        conf->bdb_enable_transactions = 0;
+        conf->bdb_enable_transactions = 1;
         conf->bdb_tx_max = 50;
         rc = bdb_start(li, DBLAYER_NORMAL_MODE);
+        if (rc == 0) {
+            pEnv = (bdb_db_env *)priv->dblayer_env;
+            if (pEnv == NULL) {
+                fprintf(stderr, "bdb_public_private_open: dbenv is not available (0x%p) for database %s\n",
+                        (void *)pEnv, db_filename ? db_filename : "unknown");
+                return EINVAL;
+            }
+            bdb_env = pEnv->bdb_DB_ENV;
+        }
     } else {
         /* Setup minimal environment */
         rc = db_env_create(&bdb_env, 0);
@@ -6960,18 +7253,40 @@ bdb_public_private_open(backend *be, const char *db_filename, int rw, dbi_env_t 
 }
 
 int
-bdb_public_private_close(dbi_env_t **env, dbi_db_t **db)
+bdb_public_private_close(struct ldbminfo *li, dbi_env_t **env, dbi_db_t **db)
 {
     DB_ENV *bdb_env = *env;
     DB *bdb_db = *db;
     int rc = 0;
+    int rw = 0;
+    dblayer_private *priv = li->li_dblayer_private;
+    bdb_config *conf = (bdb_config *)li->li_dblayer_config;
 
-    if (bdb_db) {
-        rc = bdb_db->close(bdb_db, 0);
+    if (priv) {
+        /* Detect if db is fully set up in read write mode */
+        bdb_db_env *pEnv = (bdb_db_env *)priv->dblayer_env;
+        if (pEnv) {
+            pthread_mutex_lock(&pEnv->bdb_thread_count_lock);
+            if (pEnv->bdb_thread_count > 0) {
+                rw = 1;
+            }
+            pthread_mutex_unlock(&pEnv->bdb_thread_count_lock);
+        }
     }
-    if (bdb_env) {
-        rc = bdb_env->close(bdb_env, 0);
+    if (rw == 0) {
+        if (bdb_db) {
+            rc = bdb_db->close(bdb_db, 0);
+        }
+        if (bdb_env) {
+            rc = bdb_env->close(bdb_env, 0);
+        }
+    } else {
+        rc = bdb_close(li, DBLAYER_NORMAL_MODE);
     }
+    slapi_ch_free_string(&conf->bdb_dbhome_directory);
+    slapi_ch_free_string(&conf->bdb_home_directory);
+    slapi_ch_free_string(&conf->bdb_compactdb_time);
+    slapi_ch_free_string(&conf->bdb_log_directory);
     *db = NULL;
     *env = NULL;
     return bdb_map_error(__FUNCTION__, rc);
@@ -7024,7 +7339,7 @@ int bdb_walk_dbfiles (const char *directory, const char *subdir,
             if (strncmp(DB_REGION_PREFIX, direntry->name, len) == 0) {
                 continue;
             }
-            pt = strrchr (direntry->name, *LDBM_FILENAME_SUFFIX);
+            pt = (char *)strrchr (direntry->name, *LDBM_FILENAME_SUFFIX);
             if (!pt || strcmp (pt, LDBM_FILENAME_SUFFIX)) {
                 continue;
             }
@@ -7056,7 +7371,7 @@ dbslist_store_a_db(const char * dbname, void *cbctx)
 {
     dbi_dbslist_ctx_t *ctx = cbctx;
     if (ctx->nbdbs < ctx->maxdbs) {
-        PL_strncpyz (ctx->list[ctx->nbdbs++].filename, dbname, MAXPATHLEN);
+        PR_snprintf (ctx->list[ctx->nbdbs++].filename, PATH_MAX, "%s/%s", ctx->dbhome, dbname);
     }
 }
 
@@ -7071,6 +7386,7 @@ bdb_list_dbs (const char * dbhome)
     cbctx.nbdbs++;              /* Reserve space for empty filename that marks end of list */
     cbctx.list = (dbi_dbslist_t *) slapi_ch_calloc (cbctx.nbdbs, sizeof (dbi_dbslist_t));
     cbctx.nbdbs = 0;
+    cbctx.dbhome = dbhome;
     bdb_walk_dbfiles (dbhome, NULL, dbslist_store_a_db, &cbctx);
     return cbctx.list;
 }
@@ -7127,6 +7443,10 @@ bdb_public_dblayer_compact(Slapi_Backend *be, PRBool just_changelog)
     bdb_force_checkpoint(li);
     rc = bdb_do_compact(li, just_changelog);
     bdb_force_checkpoint(li);
+
+    /* Update the compact interval after a compaction */
+    bdb_write_compact_start_time(slapi_current_utc_time(), li);
+
     return rc;
 }
 

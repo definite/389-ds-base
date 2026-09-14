@@ -2,26 +2,44 @@ import cockpit from "cockpit";
 import React from 'react';
 import {
     Alert,
-    BadgeToggle,
-    Card, CardBody, CardTitle,
-    Dropdown, DropdownItem, DropdownPosition,
+    Card,
+    CardBody,
+    CardTitle,
     Form,
-    Grid, GridItem,
+    Grid,
+    GridItem,
     Label,
     Pagination,
     SearchInput,
-    Select, SelectOption, SelectVariant,
-    SimpleList, SimpleListItem,
+    Select,
+    SelectOption,
+    SelectList,
+    MenuToggle,
+    SimpleList,
+    SimpleListItem,
     Spinner,
-    Text, TextContent, TextVariants,
-    Wizard,
+    Text,
+    TextContent,
+    TextVariants
 } from '@patternfly/react-core';
+import {
+    BadgeToggle,
+    Dropdown,
+    DropdownItem,
+    DropdownPosition,
+    Wizard
+} from '@patternfly/react-core/deprecated';
 import {
     InfoCircleIcon,
 } from '@patternfly/react-icons';
 import {
-    Table, TableHeader, TableBody, TableVariant,
-    headerCol,
+    Table,
+    Thead,
+    Tr,
+    Th,
+    Tbody,
+    Td,
+    headerCol
 } from '@patternfly/react-table';
 import EditableTable from '../../lib/editableTable.jsx';
 import {
@@ -46,6 +64,12 @@ class AddUser extends React.Component {
                 'objectClass: nsPerson',
                 'objectClass: nsAccount',
                 'objectClass: nsOrgPerson',
+            ],
+            'Traditional Account': [
+                'objectclass: top',
+                'objectClass: person',
+                'objectClass: organizationalPerson',
+                'objectClass: inetOrgPerson',
             ],
             'Posix Account': [
                 'objectclass: top',
@@ -72,6 +96,21 @@ class AddUser extends React.Component {
                 'uid', 'userCertificate', 'userPassword', 'userSMIMECertificate',
                 'userPKCS12', 'x500UniqueIdentifier'
             ],
+            'Traditional Account': [
+                'userPassword', 'telephoneNumber', 'seeAlso', 'description',
+                'title', 'registeredAddress', 'destinationIndicator',
+                'preferredDeliveryMethod', 'telexNumber', 'teletexTerminalIdentifier',
+                'internationalISDNNumber', 'facsimileTelephoneNumber', 'street',
+                'postOfficeBox', 'postalCode', 'postalAddress',
+                'physicalDeliveryOfficeName', 'ou', 'st', 'l', 'audio',
+                'businessCategory', 'carLicense', 'departmentNumber', 'displayName',
+                'employeeNumber', 'employeeType', 'givenName', 'homePhone',
+                'homePostalAddress', 'initials', 'jpegPhoto', 'labeledURI',
+                'mail', 'manager', 'mobile', 'o', 'pager', 'photo', 'roomNumber',
+                'secretary', 'uid', 'userCertificate', 'preferredLanguage',
+                'userSMIMECertificate', 'userPKCS12', 'x500uniqueIdentifier',
+                'x121Address'
+            ],
             'Posix Account': [
                 'businessCategory', 'carLicense', 'departmentNumber',
                 'description', 'employeeNumber', 'employeeType', 'homePhone',
@@ -90,7 +129,11 @@ class AddUser extends React.Component {
 
         this.requiredAttrs = {
             'Basic Account': [
-                'cn', 'displayName',
+                // uid is not technically required, but dsidm expects it
+                'uid', 'cn', 'displayName',
+            ],
+            'Traditional Account': [
+                'cn', 'sn',
             ],
             'Posix Account': [
                 'cn', 'uid', 'uidNumber', 'gidNumber', 'homeDirectory',
@@ -105,6 +148,10 @@ class AddUser extends React.Component {
             'Basic Account': [
                 'preferredDeliveryMethod', 'displayName', 'employeeNumber',
                 'preferredLanguage', 'userPassword',
+            ],
+            'Traditional Account': [
+                'displayName', 'employeeNumber', 'preferredLanguage',
+                'userPassword', 'preferredDeliveryMethod',
             ],
             'Posix Account': [
                 'preferredDeliveryMethod', 'displayName', 'employeeNumber',
@@ -184,7 +231,9 @@ class AddUser extends React.Component {
                                 myLdifArray,
                                 (result) => {
                                     this.setState({
-                                        commandOutput: result.errorCode === 0 ? _("Successfully added user!") : _("Failed to add user, error: ") + result.errorCode,
+                                        commandOutput: result.errorCode === 0 ?
+                                            _("Successfully added user!") :
+                                            _("Failed to add user: ") + result.output,
                                         resultVariant: result.errorCode === 0 ? 'success' : 'danger',
                                         adding: false,
                                     }, () => {
@@ -210,11 +259,15 @@ class AddUser extends React.Component {
                 // true ==> Do not check the attribute selection when navigating back.
                 this.updateValuesTableRows(true);
             }
+            this.setState({
+                stepIdReached: id
+            });
         };
 
-        this.handleToggleType = isOpenType => {
+        this.handleToggleType = () => {
+            const open = !this.state.isOpenType;
             this.setState({
-                isOpenType
+                isOpenType: open
             });
         };
         this.handleSelectType = (event, selection) => {
@@ -493,7 +546,7 @@ class AddUser extends React.Component {
                 onSelect={this.handleAttrDropDownSelect}
                 position={DropdownPosition.left}
                 toggle={
-                    <BadgeToggle id="toggle-attr-select" onToggle={this.handleAttrDropDownToggle}>
+                    <BadgeToggle id="toggle-attr-select" onToggle={(_event, isOpen) => this.handleAttrDropDownToggle(isOpen)}>
                         {numSelected !== 0 ? <>{numSelected} {_("selected")} </> : <>0 {_("selected")} </>}
                     </BadgeToggle>
                 }
@@ -581,26 +634,39 @@ class AddUser extends React.Component {
                         </Text>
                     </TextContent>
                 </div>
-                <div className="ds-indent">
+                <div className="ds-indent ds-margin-top">
                     <Select
-                        variant={SelectVariant.single}
-                        className="ds-margin-top-lg"
+                        id="user-type-select"
                         aria-label="Select user type"
-                        onToggle={this.handleToggleType}
+                        toggle={(toggleRef) => (
+                            <MenuToggle
+                                ref={toggleRef}
+                                onClick={this.handleToggleType}
+                                isExpanded={this.state.isOpenType}
+                            >
+                                {this.state.accountType}
+                            </MenuToggle>
+                        )}
                         onSelect={this.handleSelectType}
-                        selections={this.state.accountType}
+                        selected={this.state.accountType}
                         isOpen={this.state.isOpenType}
                     >
-                        <SelectOption key="user" value="Basic Account" />
-                        <SelectOption key="posix" value="Posix Account" />
-                        <SelectOption key="service" value="Service Account" />
+                        <SelectList>
+                            <SelectOption value="Basic Account">Basic Account</SelectOption>
+                            <SelectOption value="Traditional Account" >Traditional Account</SelectOption>
+                            <SelectOption value="Posix Account" >Posix Account</SelectOption>
+                            <SelectOption value="Service Account" >Service Account</SelectOption>
+                        </SelectList>
                     </Select>
                     <TextContent className="ds-margin-top-xlg">
                         <Text component={TextVariants.h6} className="ds-margin-top-lg ds-font-size-md">
                             <b>{_("Basic Account")}</b>{_(" - This type of user entry uses a common set of objectclasses (nsPerson, nsAccount, and nsOrgPerson).")}
                         </Text>
                         <Text component={TextVariants.h6} className="ds-margin-top-lg ds-font-size-md">
-                            <b>{_("Posix Account")}</b>{_(" - This type of user entry uses a similar set of objectclasses as the ")}<i>{_("Basic Account")}</i> {_("(nsPerson, nsAccount, nsOrgPerson, and posixAccount), but it includes POSIX attributes like:")}
+                            <b>Traditional Account</b> - This type of user entry uses a traditional/legacy set of objectclasses (person, organizationalPerson, and inetOrgPerson).
+                        </Text>
+                        <Text component={TextVariants.h6} className="ds-margin-top-lg ds-font-size-md">
+                            <b>{_("Posix Account")}</b>{_(" - This type of user entry uses a similar set of objectclasses as the ")}<i>{_("Basic Account")}</i> {_("(nsPerson, nsAccount, nsOrgPerson, and posixAccount), but it includes POSIX attributes like: ")}
                             <i>{_("uidNumber, gidNumber, homeDirectory, loginShell, and gecos")}</i>.
                         </Text>
                         <Text component={TextVariants.h6} className="ds-margin-top-lg ds-font-size-md">
@@ -619,7 +685,27 @@ class AddUser extends React.Component {
                             {_("Select Entry Attributes")}
                         </Text>
                     </TextContent>
-                    {this.buildAttrDropdown()}
+                    <Dropdown
+                        className="ds-dropdown-padding"
+                        position="left"
+                        onSelect={this.handleAttrDropDownSelect}
+                        toggle={
+                            <BadgeToggle
+                                id="toggle-attr-select"
+                                badgeProps={{
+                                    className: this.state.selectedAttributes.length > 0 ? "ds-badge-bgcolor" : undefined,
+                                    isRead: this.state.selectedAttributes.length === 0
+                                }}
+                                onToggle={(_event, isOpen) => this.handleAttrDropDownToggle(isOpen)}
+                            >
+                                {`${this.state.selectedAttributes.length} ${_("selected")}`}
+                            </BadgeToggle>
+                        }
+                        isOpen={this.state.isAttrDropDownOpen}
+                        dropdownItems={this.state.selectedAttributes.map((attr) =>
+                            <DropdownItem key={attr}>{attr}</DropdownItem>
+                        )}
+                    />
                 </div>
                 <Grid className="ds-margin-top-lg">
                     <GridItem span={5}>
@@ -627,15 +713,15 @@ class AddUser extends React.Component {
                             className="ds-font-size-md"
                             placeholder={_("Search Attributes")}
                             value={this.state.searchValue}
-                            onChange={(evt, val) => this.handleAttrSearchChange(val)}
+                            onChange={(_event, value) => this.handleAttrSearchChange(value)}
                             onClear={() => this.handleAttrSearchChange('')}
                         />
                     </GridItem>
                     <GridItem span={7}>
                         <Pagination
-                            itemCount={itemCountAddUser}
-                            page={pageAddUser}
-                            perPage={perPageAddUser}
+                            itemCount={this.state.itemCountAddUser}
+                            page={this.state.pageAddUser}
+                            perPage={this.state.perPageAddUser}
                             onSetPage={this.handleSetPageAddUser}
                             widgetId="pagination-options-menu-add-user"
                             onPerPageSelect={this.handlePerPageSelectAddUser}
@@ -643,16 +729,39 @@ class AddUser extends React.Component {
                         />
                     </GridItem>
                 </Grid>
-                <Table
-                    cells={columnsUser}
-                    rows={pagedRowsUser}
-                    onSelect={this.handleSelect}
-                    variant={TableVariant.compact}
-                    aria-label="Pagination User Attributes"
-                    canSelectAll={false}
-                >
-                    <TableHeader />
-                    <TableBody />
+                <Table aria-label="User Attributes Table" variant="compact">
+                    <Thead>
+                        <Tr>
+                            <Th screenReaderText="Select Attributes" />
+                            {this.state.columnsUser.map((column, columnIndex) => (
+                                <Th key={columnIndex}>
+                                    {typeof column === 'object' ? column.title : column}
+                                </Th>
+                            ))}
+                        </Tr>
+                    </Thead>
+                    <Tbody>
+                        {this.state.pagedRowsUser.map((row, rowIndex) => (
+                            <Tr key={rowIndex}>
+                                <Td
+                                    select={{
+                                        rowIndex,
+                                        onSelect: this.handleSelect,
+                                        isSelected: row.selected,
+                                        isDisabled: row.disableCheckbox
+                                    }}
+                                />
+                                {row.cells.map((cell, cellIndex) => (
+                                    <Td
+                                        key={`${rowIndex}_${cellIndex}`}
+                                        dataLabel={this.state.columnsUser[cellIndex]?.title || this.state.columnsUser[cellIndex]}
+                                    >
+                                        {cell}
+                                    </Td>
+                                ))}
+                            </Tr>
+                        ))}
+                    </Tbody>
                 </Table>
             </>
         );
@@ -698,7 +807,7 @@ class AddUser extends React.Component {
         );
 
         const ldifListItems = cleanLdifArray.map((line, index) =>
-            <SimpleListItem key={index} isCurrent={(typeof line === 'string' || line instanceof String) && line.startsWith('dn: ')}>
+            <SimpleListItem key={index} isActive={(typeof line === 'string' || line instanceof String) && line.startsWith('dn: ')}>
                 {line}
             </SimpleListItem>
         );
@@ -794,7 +903,7 @@ class AddUser extends React.Component {
                 component: userReviewStep,
                 nextButtonText: _("Finish"),
                 canJumpTo: stepIdReached >= 6,
-                hideBackButton: true,
+                hideBackButton: this.state.resultVariant === "success" ? true : false,
                 enableNext: !this.state.adding
             }
         ];
@@ -802,6 +911,11 @@ class AddUser extends React.Component {
         const title = (
             <>
                 {_("Parent DN: ")}&nbsp;&nbsp;<strong>{this.props.wizardEntryDn}</strong>
+                {stepIdReached >= 2 &&
+                    <>
+                        <br />Entry type:&nbsp;&nbsp;&nbsp;<strong>{this.state.accountType}</strong>
+                    </>
+                }
             </>
         );
 

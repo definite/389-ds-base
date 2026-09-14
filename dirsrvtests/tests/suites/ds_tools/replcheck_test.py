@@ -15,7 +15,7 @@ from lib389.config import CertmapLegacy
 from lib389.idm.nscontainer import nsContainers
 from lib389.idm.user import UserAccounts, TEST_USER_PROPERTIES
 from lib389.idm.services import ServiceAccounts
-from lib389.topologies import topology_m2 as topo
+from test389.topologies import topology_m2 as topo
 
 pytestmark = pytest.mark.tier1
 
@@ -67,10 +67,10 @@ def topo_tls_ldapi(topo):
 
     # Create the replication dns
     services = ServiceAccounts(m1, DEFAULT_SUFFIX)
-    repl_m1 = services.get('%s:%s' % (m1.host, m1.sslport))
+    repl_m1 = services.get(f'{DEFAULT_SUFFIX}:{m1.host}:{m1.sslport}')
     repl_m1.set('nsCertSubjectDN', m1.get_server_tls_subject())
 
-    repl_m2 = services.get('%s:%s' % (m2.host, m2.sslport))
+    repl_m2 = services.get(f'{DEFAULT_SUFFIX}:{m2.host}:{m2.sslport}')
     repl_m2.set('nsCertSubjectDN', m2.get_server_tls_subject())
 
     # Check the replication is "done".

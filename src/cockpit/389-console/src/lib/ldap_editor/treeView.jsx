@@ -1,23 +1,44 @@
 import cockpit from "cockpit";
 import React from 'react';
 import {
-    Alert, AlertGroup, AlertActionCloseButton, AlertVariant,
-    Button,
-    Bullseye,
-    Card, CardBody, CardFooter, CardTitle,
-    CardHeaderMain, CardHeader, CardActions,
-    Divider,
-    DropdownItem, Dropdown, DropdownSeparator,
-    EmptyState, EmptyStateIcon, EmptyStateBody, EmptyStateVariant,
-    Grid, GridItem,
-    KebabToggle,
-    Label,
-    Spinner,
-    Title,
-    TextContent, Text, TextVariants, TextList,
-    TextListVariants, TextListItem, TextListItemVariants,
-    Tooltip
+	Alert,
+	AlertGroup,
+	AlertActionCloseButton,
+	AlertVariant,
+	Button,
+	Bullseye,
+	Card,
+	CardBody,
+	CardFooter,
+	CardTitle,
+	CardHeader,
+	Divider,
+	EmptyState,
+	EmptyStateIcon,
+	EmptyStateBody,
+	EmptyStateVariant,
+	Grid,
+	GridItem,
+	Label,
+	Spinner,
+	Title,
+	TextContent,
+	Text,
+	TextVariants,
+	TextList,
+	TextListVariants,
+	TextListItem,
+	TextListItemVariants,
+    ToggleGroup,
+    ToggleGroupItem,
+	Tooltip, EmptyStateHeader
 } from '@patternfly/react-core';
+import {
+	DropdownItem,
+	Dropdown,
+	DropdownSeparator,
+	KebabToggle
+} from '@patternfly/react-core/deprecated';
 import {
     ArrowRightIcon,
     CatalogIcon,
@@ -37,10 +58,11 @@ import GenericPagination from './lib/genericPagination.jsx';
 import LdapNavigator from './lib/ldapNavigator.jsx';
 import CreateRootSuffix from './lib/rootSuffix.jsx';
 import { ENTRY_MENU } from './lib/constants.jsx';
-import { log_cmd } from "../tools.jsx";
+import { getApiErrorMessage, log_cmd } from "../tools.jsx";
 import {
     showCertificate,
-    b64DecodeUnicode
+    b64DecodeUnicode,
+    getUserPwpLookupFromEntry,
 } from './lib/utils.jsx';
 
 const _ = cockpit.gettext;
@@ -63,11 +85,8 @@ class EditorTreeView extends React.Component {
                 props: { colSpan: 8 },
                 title: (
                     <Bullseye>
-                        <EmptyState variant={EmptyStateVariant.small}>
-                            <EmptyStateIcon icon={ResourcesEmptyIcon} />
-                            <Title headingLevel="h2" size="lg">
-                                {_("No entry is selected")}
-                            </Title>
+                        <EmptyState variant={EmptyStateVariant.sm}>
+                            <EmptyStateHeader titleText={<>{_("No entry is selected")}</>} icon={<EmptyStateIcon icon={ResourcesEmptyIcon} />} headingLevel="h2" />
                             <EmptyStateBody>
                                 {_("Select an entry to see its details.")}
                             </EmptyStateBody>
@@ -93,6 +112,8 @@ class EditorTreeView extends React.Component {
             entryStateIcon: null,
             isSuffixEntry: false,
             entryModTime: '',
+            entryModTimeLocal: '',
+            timeFormat: 'utc',
             isEmptySuffix: false,
             showPagination: false,
             isEntryTooLarge: false,
@@ -116,6 +137,12 @@ class EditorTreeView extends React.Component {
 
         this.removeAlert = key => {
             this.setState({ alerts: [...this.state.alerts.filter(el => el.key !== key)] });
+        };
+
+        this.handleTimeToggle = (format) => {
+            this.setState({
+                timeFormat: format
+            });
         };
 
         this.onNodeOnClick = (treeViewItem) => {
@@ -192,8 +219,11 @@ class EditorTreeView extends React.Component {
                 entryRows: this.tableEmtpyStateRow,
                 tableModificationTime: Date.now(), // Passed as property.
                 entryModTime: '', // An empty value will not be rendered.
+                entryModTimeLocal: '',
                 entryIcon: null,
                 entryDn: '', // An empty value disables the actions dropdown menu.
+                isUserEntry: false,
+                userPwpLookup: null,
                 latestEntryRefreshTime: Date.now(),
                 searching: false,
             });
@@ -210,9 +240,13 @@ class EditorTreeView extends React.Component {
         const entryDn = treeViewItem.dn === '' ? 'Root DSE' : treeViewItem.dn;
         const isSuffixEntry = treeViewItem.id === "0";
         const entryModTime = treeViewItem.modTime;
+        const entryModTimeLocal = treeViewItem.modTimeLocal;
         const fullEntry = treeViewItem.fullEntry;
         const encodedValues = [];
         let isRole = false;
+        let objectclasses = [];
+        let uid = '';
+        let cn = '';
         fullEntry
                 .filter(data => (data.attribute + data.value !== '') && // Filter out empty lines
             (data.attribute !== '???: ')) // and data for empty suffix(es) and in case of failure.
@@ -253,6 +287,13 @@ class EditorTreeView extends React.Component {
                         }
                         if (myVal === 'nsroledefinition') {
                             isRole = true;
+                        }
+                        if (attrLowerCase === 'objectclass') {
+                            objectclasses.push(myVal);
+                        } else if (attrLowerCase === 'uid') {
+                            uid = val.trim();
+                        } else if (attrLowerCase === 'cn') {
+                            cn = val.trim();
                         }
                         // TODO: Use a better logic to assign icons!
                         // console.log(`!entryIcon = ${!entryIcon}`);
@@ -295,7 +336,7 @@ class EditorTreeView extends React.Component {
             "-b", entryDn, isRole ? "role" : "account", "entry-status", entryDn];
         log_cmd("updateEntryRows", "Checking if entry is activated", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: 'message' })
+                .spawn(cmd, { superuser: "require", err: 'message' })
                 .done(content => {
                     if ((entryDn !== 'Root DSE') && (entryStateIcon !== "")) {
                         const status = JSON.parse(content);
@@ -306,18 +347,24 @@ class EditorTreeView extends React.Component {
                     }
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    if ((entryDn !== 'Root DSE') && (entryStateIcon !== "") && !(errMsg.desc.includes("Root suffix can't be locked or unlocked"))) {
+                    const errMsg = getApiErrorMessage(err);
+                    if ((entryDn !== 'Root DSE') && (entryStateIcon !== "") && !(errMsg.includes("Root suffix can't be locked or unlocked"))) {
                         console.error(
                             "updateEntryRow",
                             `${isRole ? "role" : "account"} account entry-status operation failed`,
-                            errMsg.desc
+                            errMsg
                         );
                         entryState = "error: please, check browser logs";
                         entryStateIcon = <ExclamationCircleIcon className="ds-pf-red-color ct-exclamation-circle" />;
                     }
                 })
                 .finally(() => {
+                    const userPwpLookup = getUserPwpLookupFromEntry(
+                        entryDn,
+                        objectclasses,
+                        { uid: uid ? [uid] : [], cn: cn ? [cn] : [] }
+                    );
+                    const isUserEntry = userPwpLookup !== null;
                     const tableModificationTime = Date.now();
                     this.setState({
                         entryRows,
@@ -325,13 +372,16 @@ class EditorTreeView extends React.Component {
                         entryState,
                         isSuffixEntry,
                         entryModTime,
+                        entryModTimeLocal,
                         isEmptySuffix,
                         entryIsLoading,
                         isEntryTooLarge,
                         tableModificationTime,
                         entryIcon,
                         entryStateIcon,
-                        isRole
+                        isRole,
+                        isUserEntry,
+                        userPwpLookup,
                     }, () => {
                         // Now decode the encoded values.
                         // A sample object stored in the variable encodedValues looks like { index: entryRows.length, line: line }
@@ -410,18 +460,18 @@ class EditorTreeView extends React.Component {
                                                                 });
 
                                                         decodedValue =
-                                (
-                                    <>
-                                        <div>
-                                            <Alert variant={type} isInline title={diffMessage} />
-                                            <TextContent>
-                                                <TextList component={TextListVariants.dl}>
-                                                    {certItems}
-                                                </TextList>
-                                            </TextContent>
-                                        </div>
-                                    </>
-                                );
+                                                            (
+                                                                <>
+                                                                    <div>
+                                                                        <Alert variant={type} isInline title={diffMessage} />
+                                                                        <TextContent>
+                                                                            <TextList component={TextListVariants.dl}>
+                                                                                {certItems}
+                                                                            </TextList>
+                                                                        </TextContent>
+                                                                    </div>
+                                                                </>
+                                                            );
 
                                                         const newRow = [{ title: <strong>{attr}</strong> }, decodedValue];
                                                         finalRows.splice(myObj.index, 1, newRow);
@@ -465,10 +515,12 @@ class EditorTreeView extends React.Component {
 
     render () {
         const {
-            alerts, searching, isSuffixEntry, isRole,
-            firstClickOnTree, entryColumns, entryRows, entryIcon, entryDn, entryModTime, isEmptySuffix,
-            isEntryTooLarge, tableModificationTime, showEmptySuffixModal, entryState,
-            newSuffixData, isTreeLoading, refreshButtonTriggerTime, latestEntryRefreshTime, entryStateIcon
+            alerts, searching, isSuffixEntry, isRole, firstClickOnTree,
+            entryColumns, entryRows, entryIcon, entryDn, entryModTime,
+            entryModTimeLocal, isEmptySuffix, isEntryTooLarge,
+            tableModificationTime, showEmptySuffixModal, entryState,
+            newSuffixData, isTreeLoading, refreshButtonTriggerTime,
+            latestEntryRefreshTime, entryStateIcon, timeFormat, isUserEntry, userPwpLookup
         } = this.state;
 
         const { loading } = this.props;
@@ -568,6 +620,18 @@ class EditorTreeView extends React.Component {
             >
                 {_("Class of Service ...")}
             </DropdownItem>,
+            ...(isUserEntry && userPwpLookup ? [
+                <DropdownItem
+                    key="tree-view-get-pwp"
+                    component="button"
+                    name={ENTRY_MENU.getPwp}
+                    value={entryDn}
+                    data-user-type={userPwpLookup.userType}
+                    data-selector={userPwpLookup.selector}
+                >
+                    {_("View Password Policy ...")}
+                </DropdownItem>,
+            ] : []),
             /*
             <DropdownItem
                 isDisabled
@@ -715,10 +779,8 @@ class EditorTreeView extends React.Component {
                             { searching && loadingEntryComponent }
 
                             { firstClickOnTree && !loading && !searching && isValidData &&
-                                <Card isSelectable>
-                                    <CardHeader>
-                                        <CardActions>
-                                            <Dropdown
+                                <Card isSelectable isClickable>
+                                    <CardHeader actions={{ actions: <><Dropdown
                                                 onSelect={this.props.onSelectEntryOptions}
                                                 toggle={
                                                     <KebabToggle
@@ -730,13 +792,10 @@ class EditorTreeView extends React.Component {
                                                 isPlain
                                                 dropdownItems={dropdownItems}
                                                 position="right"
-                                            />
-                                        </CardActions>
-                                        <CardHeaderMain>
-                                            {entryIcon}
-                                        </CardHeaderMain>
+                                            /></>, hasNoOffset: false, className: undefined}} >
+
                                         <Title headingLevel="h6" size="md">
-                                            <span>&ensp;{entryDn} </span>
+                                            {entryIcon}<span>&ensp;{entryDn} </span>
                                             {(entryState !== "") && (entryStateIcon !== "") && (entryState !== "activated")
                                                 ? (
                                                     <Tooltip
@@ -769,11 +828,8 @@ class EditorTreeView extends React.Component {
                                         />
 
                                         { isEmptySuffix &&
-                                            <EmptyState variant={EmptyStateVariant.small}>
-                                                <EmptyStateIcon icon={ResourcesEmptyIcon} />
-                                                <Title headingLevel="h2" size="lg">
-                                                    {_("Empty suffix!")}
-                                                </Title>
+                                            <EmptyState variant={EmptyStateVariant.sm}>
+                                                <EmptyStateHeader titleText={<>{_("Empty suffix!")}</>} icon={<EmptyStateIcon icon={ResourcesEmptyIcon} />} headingLevel="h2" />
                                                 <EmptyStateBody>
                                                     <Label variant="outline" color="orange" icon={<InfoCircleIcon />}>
                                                         {_("The suffix is configured, but it has no entries.")}
@@ -798,7 +854,33 @@ class EditorTreeView extends React.Component {
                                     </CardBody>
                                     { !isEmptySuffix && (entryModTime.length > 0) &&
                                         <CardFooter>
-                                            {_("Last Modified Time")}: {entryModTime}
+                                            <div>
+                                                {_("Last Modified Time")}: <Label>
+                                                    <i>{timeFormat === 'utc' ? entryModTime : entryModTimeLocal}</i>
+                                                </Label>
+                                                <ToggleGroup
+                                                    className="ds-inline ds-left-margin"
+                                                    isCompact
+                                                    aria-label="time format toggle"
+                                                >
+                                                    <ToggleGroupItem
+                                                        text="UTC"
+                                                        buttonId="utc"
+                                                        isSelected={timeFormat === 'utc'}
+                                                        onChange={() => this.handleTimeToggle("utc")}
+                                                        className="ds-inline"
+                                                        title="UTC time"
+                                                    />
+                                                    <ToggleGroupItem
+                                                        text="Local time"
+                                                        buttonId="local"
+                                                        isSelected={timeFormat === 'local'}
+                                                        onChange={() => this.handleTimeToggle("local")}
+                                                        className="ds-inline"
+                                                        title="Local time"
+                                                    />
+                                                </ToggleGroup>
+                                            </div>
                                             <div className="ds-margin-bottom-md" />
                                             <Divider />
                                             <div className="ds-margin-bottom-md" />

@@ -828,7 +828,7 @@ slapi_vattr_filter_test_ext(
 
     if (only_check_access != 0) {
         slapi_log_err(SLAPI_LOG_ERR, "slapi_vattr_filter_test_ext",
-            "⚠️  DANGER ⚠️  - only_check_access mode is BROKEN!!! YOU MUST CHECK ACCESS WITH FILTER MATCHING");
+            "⚠️  DANGER ⚠️  - only_check_access mode is BROKEN!!! YOU MUST CHECK ACCESS WITH FILTER MATCHING\n");
     }
     PR_ASSERT(only_check_access == 0);
 
@@ -948,14 +948,17 @@ slapi_vattr_filter_test_ext_internal(
         break;
 
     case LDAP_FILTER_NOT:
+        slapi_log_err(SLAPI_LOG_FILTER, "vattr_test_filter_list_NOT", "=>\n");
         rc = slapi_vattr_filter_test_ext_internal(pb, e, f->f_not, verify_access, only_check_access, access_check_done);
         if (verify_access && only_check_access) {
             /* dont play with access control return codes
              * do not negate return code */
+            slapi_log_err(SLAPI_LOG_FILTER, "vattr_test_filter_list_NOT only check access", "<= %d\n", rc);
             break;
         }
         if (rc > 0) {
             /* an error occurred or access denied, don't negate */
+            slapi_log_err(SLAPI_LOG_FILTER, "vattr_test_filter_list_NOT slapi_vattr_filter_test_ext_internal fails", "<= %d\n", rc);
             break;
         }
         if (verify_access) {
@@ -980,6 +983,7 @@ slapi_vattr_filter_test_ext_internal(
             /* filter verification only, no error */
             rc = (rc == 0) ? -1 : 0;
         }
+        slapi_log_err(SLAPI_LOG_FILTER, "vattr_test_filter_list_NOT", "<= %d\n", rc);
         break;
 
     default:
@@ -1040,13 +1044,18 @@ vattr_test_filter_list_and(
             nomatch = -1;
             break;
         } else {
+            /* We have a match, but we need to check access */
             if (!verify_access || (*access_check_done)) {
                 nomatch = 0;
             } else {
                 /* check access */
                 rc = slapi_vattr_filter_test_ext_internal(pb, e, f, verify_access, 1, access_check_done);
-                if (rc)
+                if (rc) {
                     undefined = rc;
+                } else {
+                    /* Access is good so mark this as a match */
+                    nomatch = 0;
+                }
             }
         }
     }
@@ -1083,6 +1092,13 @@ vattr_test_filter_list_or(
                 undefined = rc;
                 continue;
             }
+        }
+        /* we are not evaluating if the entry matches
+         * but only that we have access to ALL components
+         * so check the next one
+         */
+        if (only_check_access) {
+            continue;
         }
         /* now check if filter matches */
         /*

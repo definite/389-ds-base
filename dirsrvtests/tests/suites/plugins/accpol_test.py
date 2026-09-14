@@ -10,7 +10,7 @@ import pytest
 import subprocess
 from lib389.tasks import *
 from lib389.utils import *
-from lib389.topologies import topology_st
+from test389.topologies import topology_st, topology_m1c1
 from lib389.idm.user import (UserAccount, UserAccounts)
 from lib389.plugins import (AccountPolicyPlugin, AccountPolicyConfig, AccountPolicyConfigs)
 from lib389.cos import (CosTemplate, CosPointerDefinition)
@@ -975,13 +975,13 @@ def test_glinact_nsact(topology_st, accpol_global):
     :steps:
         1. Configure Global account policy plugin
         2. Add few users to ou=groups subtree in the default suffix
-        3. Wait for few secs and inactivate user using dsidm
-        4. Wait till accountInactivityLimit exceeded.
-        5. Run ldapsearch as normal user, expected error 19.
-        6. Activate user using ns-activate.pl script
-        7. Check if account is activated, expected error 19
-        8. Replace the lastLoginTime attribute and check if account is activated
-        9. Run ldapsearch as normal user, expected 0.
+        3. Wait for 3 seconds
+        4. Check that trying to unlock the account fails
+        5. Sleep for 10 seconds so the account becomes inactivated
+        6. Verify account is inactive BEFORE unlocking
+        7. Unlock account
+        8. Replace the lastLoginTime attribute
+        9. Check the account is now active
     :expectedresults:
         1. Success
         2. Success
@@ -1001,15 +1001,24 @@ def test_glinact_nsact(topology_st, accpol_global):
 
     log.info('AccountInactivityLimit set to 12. Account will be inactivated if not accessed in 12 secs')
     add_users(topology_st, suffix, subtree, userid, nousrs, 0)
-    log.info('Sleep for 3 secs to check if account is not inactivated, expected value 0')
+
+    log.info('Sleep for 3 secs to check if account is not inactivated')
     time.sleep(3)
+
+    log.info('Try to unlock account that is still active, should fail')
     nsact_inact(topology_st, suffix, subtree, userid, nousrs, "unlock", "")
-    log.info('Sleep for 10 secs to check if account is inactivated, expected value 19')
+
+    log.info('Sleep for 10 secs so the account becomes inactivated')
     time.sleep(10)
-    nsact_inact(topology_st, suffix, subtree, userid, nousrs, "unlock", "")
+
+    log.info('Verify account is inactive BEFORE unlocking')
     account_status(topology_st, suffix, subtree, userid, nousrs, 0, "Disabled")
-    nsact_inact(topology_st, suffix, subtree, userid, nousrs, "entry-status",
-                "inactivity limit exceeded")
+    nsact_inact(topology_st, suffix, subtree, userid, nousrs, "entry-status", "inactivity limit exceeded")
+
+    log.info('Unlock account')
+    nsact_inact(topology_st, suffix, subtree, userid, nousrs, "unlock", "")
+
+    log.info('Replace the lastLoginTime attribute and check the account is now active')
     add_time_attr(topology_st, suffix, subtree, userid, nousrs, 'lastLoginTime')
     account_status(topology_st, suffix, subtree, userid, nousrs, 0, "Enabled")
     nsact_inact(topology_st, suffix, subtree, userid, nousrs, "entry-status", "activated")
@@ -1298,6 +1307,140 @@ def test_locact_modrdn(topology_st, accpol_local):
     account_status(topology_st, suffix, subtree, userid, 1, 0, "Enabled")
     del_users(topology_st, suffix, subtree, userid, nousrs)
 
+def test_acct_policy_consumer(topology_m1c1, request):
+    """Test the lastLoginHistory is updated on consumer without
+    referral error
+
+    :id: 53a9a2c7-6b10-41c9-b9f9-bde412d04acb
+    :setup: Supplier Instance, Consumer Instance
+    :steps:
+        1. Create a test entry on the supplier
+        2. Configure lastLoginTime on supplier and consumer
+        3. On supplier 3 binds of the test entry
+        4. On supplier check there is 3 lastLoginHistory values
+        5. On supplier check there is no error in error logs
+        6. On consumer 3 binds of the test entry
+        7. On consumer check there is 3 lastLoginHistory values
+        8. On consumer check there is no error in error logs
+    :expectedresults:
+        1. Success
+        2. Success
+        3. Success
+        4. Success
+        5. Success
+        6. Success
+        7. Success
+        8. Success
+    """
+
+    supplier = topology_m1c1.ms['supplier1']
+    consumer = topology_m1c1.cs['consumer1']
+    USER_PW = 'password'
+
+    # Add on the supplier a test user entry and wait it is on the consumer
+    users_supplier = UserAccounts(supplier, DEFAULT_SUFFIX, rdn=None)
+    user_supplier = users_supplier.create_test_user(uid=1000, gid=2000)
+    user_supplier.replace('userPassword', USER_PW)
+
+    users_consumer = UserAccounts(consumer, DEFAULT_SUFFIX, rdn=None)
+    for i in range(0, 10):
+        try:
+            user_consumer = users_consumer.get("test_user_1000")
+            break
+        except ldap.NO_SUCH_OBJECT:
+            time.sleep(1)
+
+    # Pause replication before restarting supplier/consumer so release_replica
+    # can complete cleanly
+    topology_m1c1.pause_all_replicas()
+    time.sleep(5)
+
+    # Configure lastLoginTime on supplier and consumer
+    plugin = AccountPolicyPlugin(supplier)
+    plugin.enable()
+    ACCPOL_DN = "cn={},{}".format(PLUGIN_ACCT_POLICY, DN_PLUGIN)
+    ACCP_CONF = "{},{}".format(DN_CONFIG, ACCPOL_DN)
+    plugin.set('nsslapd-pluginarg0', ACCP_CONF)
+    accp = AccountPolicyConfig(supplier, dn=ACCP_CONF)
+    accp.set('alwaysrecordlogin', 'yes')
+    accp.set('stateattrname', 'lastLoginTime')
+    supplier.restart(timeout=10)
+
+    plugin = AccountPolicyPlugin(consumer)
+    plugin.enable()
+    ACCPOL_DN = "cn={},{}".format(PLUGIN_ACCT_POLICY, DN_PLUGIN)
+    ACCP_CONF = "{},{}".format(DN_CONFIG, ACCPOL_DN)
+    plugin.set('nsslapd-pluginarg0', ACCP_CONF)
+    accp = AccountPolicyConfig(consumer, dn=ACCP_CONF)
+    accp.set('alwaysrecordlogin', 'yes')
+    accp.set('stateattrname', 'lastLoginTime')
+    consumer.restart(timeout=10)
+
+    # Allow replication to resume before bind tests
+    topology_m1c1.resume_all_replicas()
+    time.sleep(2)
+
+    # On supplier
+    # Do 3 binds with a delay to
+    # allow several values lastLoginHistory
+    user_supplier.bind(USER_PW)
+    time.sleep(2)
+    user_supplier = users_supplier.get("test_user_1000")
+    user_supplier.bind(USER_PW)
+    time.sleep(2)
+    user_supplier = users_supplier.get("test_user_1000")
+    user_supplier.bind(USER_PW)
+    time.sleep(2)
+
+    # Verify there is no referral error
+    results = supplier.ds_error_log.match('.*.acct_update_login_history - Modify error 10 on entry*')
+    assert not results
+
+    # Verify that we got 3 values for lastLoginHistory
+    assert len(user_supplier.get_attr_vals_utf8_l('lastLoginHistory')) == 3
+
+    # On Consumer
+    # Do 3 binds with a delay to
+    # allow several values lastLoginHistory
+    user_supplier.bind(USER_PW)
+    user_consumer.bind(USER_PW)
+    time.sleep(2)
+    user_consumer = users_supplier.get("test_user_1000")
+    user_consumer.bind(USER_PW)
+    time.sleep(2)
+    user_consumer = users_supplier.get("test_user_1000")
+    user_consumer.bind(USER_PW)
+    time.sleep(2)
+
+    # Verify there is no referral error
+    results = consumer.ds_error_log.match('.*.acct_update_login_history - Modify error 10 on entry*')
+    assert not results
+
+    # Verify that we got at least 3 values for lastLoginHistory
+    assert len(user_consumer.get_attr_vals_utf8_l('lastLoginHistory')) >= 3
+
+
+    def fin():
+        user_supplier.delete()
+        topology_m1c1.pause_all_replicas()
+        time.sleep(5)
+        log.info('Disabling Global accpolicy plugin and removing pwpolicy attrs')
+        try:
+            plugin = AccountPolicyPlugin(supplier)
+            plugin.disable()
+        except ldap.LDAPError as e:
+            log.error('Failed to disable Global accpolicy plugin, {}'.format(e.message['desc']))
+            assert False
+        supplier.restart(timeout=10)
+        try:
+            plugin = AccountPolicyPlugin(consumer)
+            plugin.disable()
+        except ldap.LDAPError as e:
+            log.error('Failed to disable Global accpolicy plugin, {}'.format(e.message['desc']))
+            assert False
+        consumer.restart(timeout=10)
+
+    request.addfinalizer(fin)
 
 if __name__ == '__main__':
     # Run isolated

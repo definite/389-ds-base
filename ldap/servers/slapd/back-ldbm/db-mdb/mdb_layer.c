@@ -1,5 +1,5 @@
 /** BEGIN COPYRIGHT BLOCK
- * Copyright (C) 2023 Red Hat, Inc.
+ * Copyright (C) 2026 Red Hat, Inc.
  * All rights reserved.
  *
  * License: GPL (version 3 or any later version).
@@ -19,9 +19,7 @@
 #include <prclist.h>
 #include <glob.h>
 
-Slapi_ComponentId *dbmdb_componentid;
-
-#define BULKOP_MAX_RECORDS  100 /* Max records handled by a single bulk operations */
+Slapi_ComponentId *dbmdb_componentid = NULL;
 
 #define RECNO_CACHE_INTERVAL 1000  /* 1 key added in cache for every RECNO_CACHE_INTERVAL vlv keys */
 
@@ -31,7 +29,6 @@ typedef struct {
     uint dbi_flags;          /* dbi flags */
     MDB_cursor *cursor;      /* cursor position */
     int op;                  /* MDB operation to get next value */
-    int maxrecords;          /* Number maximum of operation before moving to next block */
     MDB_val data0;           /* data got when setting the cursor */
     MDB_val data;            /* data for single or multiple operation */
     MDB_val key;             /* key */
@@ -346,6 +343,7 @@ dbmdb_close(struct ldbminfo *li, int dbmode)
     }
 
     return_value |= dbmdb_post_close(li, dbmode);
+    shutdown_mdbtxn();
 
     return return_value;
 }
@@ -800,7 +798,7 @@ dbmdb_database_size(struct ldbminfo *li)
  */
 
 int
-dbmdb_copyfile(char *source, char *destination, int overwrite __attribute__((unused)), int mode)
+dbmdb_copyfile(char *source, char *destination, int overwrite __attribute__((unused)), int mode, Slapi_Task *task)
 {
 #ifdef DB_USE_64LFS
 #define OPEN_FUNCTION dbmdb_open_large
@@ -823,6 +821,10 @@ dbmdb_copyfile(char *source, char *destination, int overwrite __attribute__((unu
     if (-1 == source_fd) {
         slapi_log_err(SLAPI_LOG_ERR, "dbmdb_copyfile", "Failed to open source file %s by \"%s\"\n",
                       source, strerror(errno));
+        if (task) {
+            slapi_task_log_notice(task, "Failed to open source file %s by \"%s\"",
+                                  source, strerror(errno));
+        }
         goto error;
     }
     /* Open destination file */
@@ -830,10 +832,17 @@ dbmdb_copyfile(char *source, char *destination, int overwrite __attribute__((unu
     if (-1 == dest_fd) {
         slapi_log_err(SLAPI_LOG_ERR, "dbmdb_copyfile", "Failed to open dest file %s by \"%s\"\n",
                       destination, strerror(errno));
+        if (task) {
+            slapi_task_log_notice(task, "Failed to open dest file %s by \"%s\"",
+                                  destination, strerror(errno));
+        }
         goto error;
     }
     slapi_log_err(SLAPI_LOG_INFO,
                   "dbmdb_copyfile", "Copying %s to %s\n", source, destination);
+    if (task) {
+        slapi_task_log_notice(task, "Copying %s to %s", source, destination);
+    }
     /* Loop round reading data and writing it */
     while (1) {
         int i;
@@ -844,6 +853,10 @@ dbmdb_copyfile(char *source, char *destination, int overwrite __attribute__((unu
             if (return_value < 0) {
                 slapi_log_err(SLAPI_LOG_ERR, "dbmdb_copyfile", "Failed to read by \"%s\": rval = %d\n",
                               strerror(errno), return_value);
+                if (task) {
+                    slapi_task_log_notice(task, "Failed to read by \"%s\": rval = %d",
+                                          strerror(errno), return_value);
+                }
             }
             break;
         }
@@ -858,10 +871,17 @@ dbmdb_copyfile(char *source, char *destination, int overwrite __attribute__((unu
                 /* means error */
                 slapi_log_err(SLAPI_LOG_ERR, "dbmdb_copyfile", "Failed to write by \"%s\"; real: %d bytes, exp: %lu bytes\n",
                               strerror(errno), return_value, bytes_to_write);
+                if (task) {
+                    slapi_task_log_notice(task, "Failed to write by \"%s\"; real: %d bytes, exp: %lu bytes",
+                                          strerror(errno), return_value, bytes_to_write);
+                }
                 if (return_value > 0) {
                     bytes_to_write -= return_value;
                     ptr += return_value;
                     slapi_log_err(SLAPI_LOG_NOTICE, "dbmdb_copyfile", "Retrying to write %lu bytes\n", bytes_to_write);
+                    if (task) {
+                        slapi_task_log_notice(task, "Retrying to write %lu bytes", bytes_to_write);
+                    }
                 } else {
                     break;
                 }
@@ -959,7 +979,7 @@ dbmdb_backup(struct ldbminfo *li, char *dest_dir, Slapi_Task *task)
     if (task) {
         slapi_task_log_notice(task, "Backing up file (%s)", pathname2);
     }
-    return_value = dbmdb_copyfile(pathname1, pathname2, 0, li->li_mode | 0400);
+    return_value = dbmdb_copyfile(pathname1, pathname2, 0, li->li_mode | 0400, task);
     if (0 > return_value) {
         slapi_log_err(SLAPI_LOG_ERR,
                       "dbmdb_backup", "Error in copying version file "
@@ -981,8 +1001,11 @@ dbmdb_backup(struct ldbminfo *li, char *dest_dir, Slapi_Task *task)
     /* Backup the config files */
     if (ldbm_archive_config(dest_dir, task) != 0) {
         slapi_log_err(SLAPI_LOG_ERR, "dbmdb_backup",
-                "Backup of config files failed or is incomplete\n");
-         if (0 == return_value) {
+                      "Backup of config files failed or is incomplete\n");
+        if (task) {
+            slapi_task_log_notice(task, "Backup of config files failed or is incomplete");
+        }
+        if (0 == return_value) {
             return_value = -1;
         }
     }
@@ -1021,7 +1044,7 @@ dbmdb_restore_file(struct ldbminfo *li, Slapi_Task *task, const char *src_dir, c
 {
     char *pathname1 = slapi_ch_smprintf("%s/%s", src_dir, filename);
     char *pathname2 = slapi_ch_smprintf("%s/%s", MDB_CONFIG(li)->home, filename);
-    int return_value = dbmdb_copyfile(pathname1, pathname2, PR_TRUE, li->li_mode);
+    int return_value = dbmdb_copyfile(pathname1, pathname2, PR_TRUE, li->li_mode, task);
     if (return_value) {
         slapi_log_err(SLAPI_LOG_ERR,
                       "dbmdb_restore", "Failed to copy database map file to %s.\n", pathname2);
@@ -1064,8 +1087,8 @@ dbmdb_restore(struct ldbminfo *li, char *src_dir, Slapi_Task *task)
         }
         return LDAP_UNWILLING_TO_PERFORM;
     } else if (!S_ISDIR(sbuf.st_mode)) {
-        slapi_log_err(SLAPI_LOG_ERR, "dbmdb_restore", "Backup directory %s is not "
-                                                        "a directory.\n",
+        slapi_log_err(SLAPI_LOG_ERR, "dbmdb_restore",
+                      "Backup directory %s is not a directory.\n",
                       src_dir);
         if (task) {
             slapi_task_log_notice(task, "Restore: backup directory %s is not a directory.",
@@ -1128,14 +1151,21 @@ dbmdb_restore(struct ldbminfo *li, char *src_dir, Slapi_Task *task)
         goto error_out;
     }
 
-    if (0 != tmp_rval)
+    if (0 != tmp_rval) {
         slapi_log_err(SLAPI_LOG_WARNING, "dbmdb_restore", "Unable to verify the index configuration\n");
+        if (task) {
+            slapi_task_log_notice(task, "Unable to verify the index configuration");
+        }
+    }
 
     if (li->li_flags & SLAPI_TASK_RUNNING_FROM_COMMANDLINE) {
         /* command line: close the database down again */
         tmp_rval = dblayer_close(li, dbmode);
         if (0 != tmp_rval) {
             slapi_log_err(SLAPI_LOG_ERR, "dbmdb_restore", "Failed to close database\n");
+            if (task) {
+                slapi_task_log_notice(task, "Failed to close database");
+            }
         }
     } else {
         allinstance_set_busy(li); /* on-line mode */
@@ -1365,10 +1395,6 @@ dbmdb_get_info(Slapi_Backend *be, int cmd, void **info)
             *(char **)info = NULL;
             rc = 0;
         }
-        break;
-    }
-    case BACK_INFO_IS_ENTRYRDN: {
-        *(int *)info = entryrdn_get_switch();
         break;
     }
     case BACK_INFO_INDEX_KEY : {
@@ -1696,7 +1722,7 @@ int dbmdb_public_bulk_nextdata(dbi_bulk_t *bulkdata, dbi_val_t *data)
             dblayer_value_set_buffer(bulkdata->be, data, v, dbmdb_data->data_size);
         }
     } else {
-        if (!dbmdb_data->op || (*idx)++ >= dbmdb_data->maxrecords) {
+        if (!dbmdb_data->op) {
             return DBI_RC_NOTFOUND;
         }
         dblayer_value_set_buffer(bulkdata->be, data, v, dbmdb_data->data.mv_size);
@@ -1705,6 +1731,7 @@ int dbmdb_public_bulk_nextdata(dbi_bulk_t *bulkdata, dbi_val_t *data)
             rc = 0;
             dbmdb_data->op = 0;
         }
+        (*idx)++;
     }
     rc = dbmdb_map_error(__FUNCTION__, rc);
     return rc;
@@ -1869,7 +1896,6 @@ int dbmdb_public_cursor_bulkop(dbi_cursor_t *cursor,  dbi_op_t op, dbi_val_t *ke
     mdb_dbi_flags(mdb_cursor_txn(dbmdb_cur), mdb_cursor_dbi(dbmdb_cur), &dbmdb_data->dbi_flags);
     dbmdb_data->use_multiple = (dbmdb_data->dbi_flags & MDB_DUPFIXED);
     PR_ASSERT(dbmdb_data->dbi_flags & MDB_DUPSORT);
-    dbmdb_data->maxrecords = BULKOP_MAX_RECORDS;
     dbmdb_data->data.mv_data = NULL;
     dbmdb_data->data.mv_size = 0;
     dbmdb_data->op = 0;
@@ -2108,6 +2134,7 @@ void *dbmdb_recno_cache_build(void *arg)
     int len = 0;
     int rc = 0;
 
+    DBG_LOG(DBGMDB_LEVEL_VLV, "dbmdb_recno_cache_build(%s)", rcctx->rcdbname);
     /* Open/creat cache dbi */
     rc = dbmdb_open_dbi_from_filename(&rcctx->rcdbi, rcctx->cursor->be, rcctx->rcdbname, NULL, MDB_CREATE);
     slapi_ch_free_string(&rcctx->rcdbname);
@@ -2131,63 +2158,51 @@ void *dbmdb_recno_cache_build(void *arg)
             txn_ctx.flags |= DBMDB_TXNCTX_NEED_COMMIT;
         }
     }
+    if (rc == 0) {
+        rc = MDB_CURSOR_GET(txn_ctx.cursor, &key, &data, MDB_FIRST);
+        recno = 1;
+    }
     while (rc == 0) {
+        struct ldbminfo *li = (struct ldbminfo *)rcctx->cursor->be->be_database->plg_private;
         slapi_log_err(SLAPI_LOG_DEBUG, "dbmdb_recno_cache_build", "recno=%d\n", recno);
-        if (recno % RECNO_CACHE_INTERVAL != 1) {
-            recno++;
-            rc = MDB_CURSOR_GET(txn_ctx.cursor, &key, &data, MDB_NEXT);
-            continue;
-        }
-        /* close the txn from time to time to avoid locking all dbi page */
-        rc = dbmdb_end_recno_cache_txn(&txn_ctx, 0);
-        rc |= dbmdb_begin_recno_cache_txn(rcctx, &txn_ctx, rcctx->dbi->dbi);
-        if (rc) {
-            break;
-        }
-        /* Reset to new cursor to the old position */
-        if (recno == 1) {
-            rc = MDB_CURSOR_GET(txn_ctx.cursor, &key, &data, MDB_FIRST);
-        } else {
-            rc = MDB_CURSOR_GET(txn_ctx.cursor, &key, &data, MDB_SET);
-            if (rc == MDB_NOTFOUND) {
-                rc = MDB_CURSOR_GET(txn_ctx.cursor, &key, &data, MDB_SET_RANGE);
+        if (recno % RECNO_CACHE_INTERVAL == 1) {
+            /* Prepare the cache data */
+            len = sizeof(*rce) + data.mv_size + key.mv_size;
+            if (len > li->li_max_key_len) {
+                key.mv_size = li->li_max_key_len - data.mv_size - sizeof(*rce);
+                len = li->li_max_key_len;
             }
-        }
-        if (rc) {
-            break;
-        }
-        /* Prepare the cache data */
-        len = sizeof(*rce) + data.mv_size + key.mv_size;
-        rce = (dbmdb_recno_cache_elmt_t*)slapi_ch_malloc(len);
-        rce->len = len;
-        rce->recno = recno;
-        rce->key.mv_size = key.mv_size;
-        rce->key.mv_data = &rce[1];
-        rce->data.mv_size = data.mv_size;
-        rce->data.mv_data = ((char*)&rce[1])+rce->key.mv_size;
-        memcpy(rce->key.mv_data, key.mv_data, key.mv_size);
-        memcpy(rce->data.mv_data, data.mv_data, data.mv_size);
-        rcdata.mv_data = rce;
-        rcdata.mv_size = len;
-        dbmdb_generate_recno_cache_key_by_recno(&rckey, recno);
-        rc = MDB_PUT(txn_ctx.txn, rcctx->rcdbi->dbi, &rckey, &rcdata, 0);
-        slapi_ch_free(&rckey.mv_data);
-        if (rc) {
-            slapi_log_err(SLAPI_LOG_ERR, "dbmdb_recno_cache_build",
-                          "Failed to write record in db %s, key=%s error: %s\n",
-                          rcctx->rcdbi->dbname, (char*)(key.mv_data), mdb_strerror(rc));
-        } else {
-            dbmdb_generate_recno_cache_key_by_data(&rckey, &key, &data);
+            rce = (dbmdb_recno_cache_elmt_t*)slapi_ch_malloc(len);
+            rce->len = len;
+            rce->recno = recno;
+            rce->key.mv_size = key.mv_size;
+            rce->key.mv_data = &rce[1];
+            rce->data.mv_size = data.mv_size;
+            rce->data.mv_data = ((char*)&rce[1])+rce->key.mv_size;
+            memcpy(rce->key.mv_data, key.mv_data, key.mv_size);
+            memcpy(rce->data.mv_data, data.mv_data, data.mv_size);
+            rcdata.mv_data = rce;
+            rcdata.mv_size = len;
+            dbmdb_generate_recno_cache_key_by_recno(&rckey, recno);
             rc = MDB_PUT(txn_ctx.txn, rcctx->rcdbi->dbi, &rckey, &rcdata, 0);
             slapi_ch_free(&rckey.mv_data);
-            txn_ctx.flags |= DBMDB_TXNCTX_NEED_COMMIT;
             if (rc) {
                 slapi_log_err(SLAPI_LOG_ERR, "dbmdb_recno_cache_build",
                               "Failed to write record in db %s, key=%s error: %s\n",
                               rcctx->rcdbi->dbname, (char*)(key.mv_data), mdb_strerror(rc));
+            } else {
+                dbmdb_generate_recno_cache_key_by_data(&rckey, &key, &data);
+                rc = MDB_PUT(txn_ctx.txn, rcctx->rcdbi->dbi, &rckey, &rcdata, 0);
+                slapi_ch_free(&rckey.mv_data);
+                txn_ctx.flags |= DBMDB_TXNCTX_NEED_COMMIT;
+                if (rc) {
+                    slapi_log_err(SLAPI_LOG_ERR, "dbmdb_recno_cache_build",
+                                  "Failed to write record in db %s, key=%s error: %s\n",
+                                  rcctx->rcdbi->dbname, (char*)(key.mv_data), mdb_strerror(rc));
+                }
             }
+            slapi_ch_free(&rcdata.mv_data);
         }
-        slapi_ch_free(&rcdata.mv_data);
         rc = MDB_CURSOR_GET(txn_ctx.cursor, &key, &data, MDB_NEXT);
         recno++;
     }
@@ -2215,6 +2230,13 @@ cache_built:
     }
     rcctx->rc = rc;
     return NULL;
+}
+
+static void *
+dbmdb_recno_cache_build_thread(void *arg)
+{
+    slapi_set_thread_name("recno-cache");
+    return dbmdb_recno_cache_build(arg);
 }
 
 /* Find nearest recno cache record from the key */
@@ -2245,7 +2267,7 @@ int dbmdb_recno_cache_lookup(dbi_cursor_t *cursor, MDB_val *cache_key, dbmdb_rec
             rc = rcctx.rc;
         } else if (rcctx.mode == RCMODE_USE_NEW_THREAD) {
             pthread_t tid;
-            rc = pthread_create(&tid, NULL, dbmdb_recno_cache_build, &rcctx);
+            rc = pthread_create(&tid, NULL, dbmdb_recno_cache_build_thread, &rcctx);
             if (rc ==0) {
                 rc = pthread_join(tid, NULL);
             }
@@ -2378,18 +2400,27 @@ int dbmdb_cursor_set_recno(dbi_cursor_t *cursor, MDB_val *dbmdb_key, MDB_val *db
     }
 
     memcpy(&recno, dbmdb_key->mv_data, sizeof (dbi_recno_t));
+#ifdef DBMDB_DEBUG
+    char dbistr[DBISTRMAXSIZE];
+    dbi_str(cursor->cur, 0, dbistr);
+    DBG_LOG(DBGMDB_LEVEL_VLV, "dbmdb_cursor_set_recno: recno=%d dbi=%s", recno, dbistr);
+#endif
     dbmdb_generate_recno_cache_key_by_recno(&cache_key, recno);
     rc = dbmdb_recno_cache_lookup(cursor, &cache_key, &rce);
     if (rc ==0) {
         rc = MDB_CURSOR_GET(cursor->cur, &rce->key, &rce->data, MDB_SET_RANGE);
     }
     while (rc == 0 && recno > rce->recno) {
+        DBG_LOG(DBGMDB_LEVEL_VLV, "Current record index is %d Target is %d", rce->recno, recno);
         rce->recno++;
         rc = MDB_CURSOR_GET(cursor->cur, &rce->key, &rce->data, MDB_NEXT);
     }
     if (rc == 0 && dbmdb_data->mv_size == rce->data.mv_size) {
         /* Should always be the case */
+        DBG_LOG(DBGMDB_LEVEL_VLV, "SUCCESS");
         memcpy(dbmdb_data->mv_data , rce->data.mv_data, dbmdb_data->mv_size);
+    } else {
+        DBG_LOG(DBGMDB_LEVEL_VLV, "FAILURE: rc=%d dbmdb_data->mv_size=%d rce->data.mv_size=%d", rc, dbmdb_data->mv_size, rce->data.mv_size);
     }
 
     slapi_ch_free((void**)&rce);
@@ -2658,6 +2689,54 @@ dbmdb_get_entries_count(dbi_db_t *db, dbi_txn_t *txn, int *count)
     return dbmdb_map_error(__FUNCTION__, rc);
 }
 
+static int
+dbmdb_get_page_count(dbi_db_t *db, uint32_t *count)
+{
+    dbmdb_dbi_t *dbmdb_db = (dbmdb_dbi_t*)db;
+    dbi_txn_t *txn = NULL;
+    MDB_stat stats = {0};
+    int rc = 0;
+
+    rc = START_TXN(&txn, txn, TXNFL_RDONLY);
+    rc = mdb_stat(TXN(txn), dbmdb_db->dbi, &stats);
+    if (rc == 0) {
+        *count = stats.ms_branch_pages + stats.ms_leaf_pages + stats.ms_overflow_pages;
+    }
+
+    END_TXN(&txn, 1);
+    return dbmdb_map_error(__FUNCTION__, rc);
+}
+
+/*
+ * Get the page count for this backend instance
+ * If any error occurs just return 0
+ */
+uint32_t
+dbmdb_get_inst_page_count(struct ldbminfo *li, ldbm_instance *inst)
+{
+    if (!inst->inst_id2entry) {
+        dbmdb_ctx_t *ctx = MDB_CONFIG(li);
+        int rc = 0;
+
+        if (!ctx->env) {
+            return 0;
+        }
+
+        rc = dbmdb_instance_start(inst->inst_be, DBLAYER_NORMAL_MODE);
+        if (rc == 0 && inst->inst_id2entry) {
+            dbmdb_get_page_count(inst->inst_id2entry, &inst->inst_page_count);
+        } else {
+            slapi_log_err(SLAPI_LOG_ALERT, "dbmdb_get_inst_page_count",
+                          "error returning count: %d (%p)\n", rc, inst->inst_id2entry);
+        }
+        dblayer_instance_close(inst->inst_be);
+    } else {
+        dbmdb_get_page_count(inst->inst_id2entry, &inst->inst_page_count);
+    }
+
+    return inst->inst_page_count;
+}
+
 /* Get the number of duplicates for current key */
 int
 dbmdb_public_cursor_get_count(dbi_cursor_t *cursor, dbi_recno_t *count)
@@ -2731,7 +2810,7 @@ dbmdb_public_private_open(backend *be, const char *db_filename, int rw, dbi_env_
 
 
 int
-dbmdb_public_private_close(dbi_env_t **env, dbi_db_t **db)
+dbmdb_public_private_close(struct ldbminfo *li, dbi_env_t **env, dbi_db_t **db)
 {
     if (*db)
         dbmdb_public_db_op(*db, NULL, DBI_OP_CLOSE, NULL, NULL);
@@ -2870,11 +2949,12 @@ dbmdb_public_clear_vlv_cache(Slapi_Backend *be, dbi_txn_t *txn, dbi_db_t *db)
     MDB_val ok = { 0 };
     int rc = 0;
 
+    DBG_LOG(DBGMDB_LEVEL_VLV, "dbmdb_public_clear_vlv_cache(%s)", rcdbname);
     ok.mv_data = "OK";
     ok.mv_size = 2;
     rc = dbmdb_open_dbi_from_filename(&rcdbi, be, rcdbname, NULL, 0);
     if (rc == 0) {
-        rc = MDB_DEL(TXN(txn), rcdbi->dbi, &ok, &ok);
+        rc = MDB_DEL(TXN(txn), rcdbi->dbi, &ok, NULL);
     }
     slapi_ch_free_string(&rcdbname);
     return rc;
@@ -2925,7 +3005,7 @@ dbmdb_idl_new_fetch(backend *be, dbi_db_t *db, dbi_val_t *inkey, dbi_txn_t *txn,
         }
     }
 
-    if (allidslimit && count >= allidslimit) {
+    if ((NEW_IDL_NO_ALLID != *flag_err) && allidslimit && count >= allidslimit) {
         idl = idl_allids(be);
         slapi_log_err(SLAPI_LOG_TRACE, "dbmdb_idl_new_fetch", "%s returns allids (attribute: %s)\n",
                       (char *)key.mv_data, index_id);

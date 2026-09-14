@@ -1,36 +1,34 @@
 import cockpit from "cockpit";
 import React from "react";
 import {
-    Button,
-    Checkbox,
-    Grid,
-    GridItem,
-    ExpandableSection,
-    Form,
-    FormHelperText,
-    FormSelect,
-    FormSelectOption,
-    Label,
-    Modal,
-    ModalVariant,
-    NumberInput,
-    SearchInput,
-    Select,
-    SelectOption,
-    SelectVariant,
-    Spinner,
-    Switch,
-    Text,
-    TextContent,
-    TextInput,
-    TextList,
-    TextListItem,
-    TextVariants,
-    ToggleGroup,
-    ToggleGroupItem,
-    Tooltip,
-    ValidatedOptions
-} from "@patternfly/react-core";
+	Button,
+	Checkbox,
+	Grid,
+	GridItem,
+	ExpandableSection,
+	Form,
+	FormHelperText,
+	FormSelect,
+	FormSelectOption,
+	Label,
+	Modal,
+	ModalVariant,
+	NumberInput,
+	SearchInput,
+	Spinner,
+	Switch,
+	Text,
+	TextContent,
+	TextInput,
+	TextList,
+	TextListItem,
+	TextVariants,
+	ToggleGroup,
+	ToggleGroupItem,
+	Tooltip,
+	ValidatedOptions
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
 import {
     expandable
 } from '@patternfly/react-table';
@@ -46,8 +44,9 @@ import {
 } from './lib/utils.jsx';
 import { ENTRY_MENU } from './lib/constants.jsx';
 import EditorTableView from './tableView.jsx';
-import { log_cmd, valid_dn } from '../tools.jsx';
+import { getApiErrorMessage, log_cmd, valid_dn } from '../tools.jsx';
 import GenericWizard from './wizards/genericWizard.jsx';
+import { EffectivePwpModal } from './effectivePwpModal.jsx';
 
 const _ = cockpit.gettext;
 
@@ -106,17 +105,39 @@ export class SearchDatabase extends React.Component {
             isWizardOpen: false,
             wizardEntryDn: '',
             treeViewRootSuffixes: [], // TODO when aci's are ready (is there a better list of suffixes?)
+            showPwpModal: false,
+            pwpModalEntryDn: '',
+            pwpModalUserType: '',
+            pwpModalSelector: '',
+        };
+
+        this.handlePwpModalClose = () => {
+            this.setState({
+                showPwpModal: false,
+                pwpModalEntryDn: '',
+                pwpModalUserType: '',
+                pwpModalSelector: '',
+            });
+        };
+
+        this.openPwpModal = (entryDn, userPwpLookup) => {
+            this.setState({
+                showPwpModal: true,
+                pwpModalEntryDn: entryDn,
+                pwpModalUserType: userPwpLookup.userType,
+                pwpModalSelector: userPwpLookup.selector,
+            });
         };
 
         this.initialResultText = _("Loading ...");
 
-        this.handleChangeSwitch = checkIfLocked => {
+        this.handleChangeSwitch = (_event, checkIfLocked) => {
             this.setState({
                 checkIfLocked
             });
         };
 
-        this.handleToggle = isExpanded => {
+        this.handleToggle = (_event, isExpanded) => {
             this.setState({
                 isExpanded
             });
@@ -137,7 +158,7 @@ export class SearchDatabase extends React.Component {
         };
 
         // Custom filter attributes
-        this.handleCustomAttrToggle = isCustomAttrOpen => {
+        this.handleCustomAttrToggle = (_event, isCustomAttrOpen) => {
             this.setState({
                 isCustomAttrOpen,
             });
@@ -150,22 +171,10 @@ export class SearchDatabase extends React.Component {
         };
 
         this.handleCustomAttrChange = (event, selection) => {
-            const { customSearchAttrs } = this.state;
-            if (customSearchAttrs.includes(selection)) {
-                this.setState(
-                    prevState => ({
-                        customSearchAttrs: prevState.customSearchAttrs.filter(item => item !== selection),
-                        isCustomAttrOpen: false
-                    }), () => { this.buildSearchFilter(this.state.searchText) }
-                );
-            } else {
-                this.setState(
-                    prevState => ({
-                        customSearchAttrs: [...prevState.customSearchAttrs, selection],
-                        isCustomAttrOpen: false,
-                    }), () => { this.buildSearchFilter(this.state.searchText) }
-                );
-            }
+            this.setState({
+                customSearchAttrs: Array.isArray(selection) ? selection : [],
+                isCustomAttrOpen: false,
+            }, () => { this.buildSearchFilter(this.state.searchText) });
         };
 
         this.buildSearchFilter = (value) => {
@@ -234,7 +243,7 @@ export class SearchDatabase extends React.Component {
             });
         };
 
-        this.handleSearchTypeClick = (isSelected, event) => {
+        this.handleSearchTypeClick = (event, isSelected) => {
             const id = event.currentTarget.id;
             this.setState({
                 searchType: id,
@@ -243,7 +252,7 @@ export class SearchDatabase extends React.Component {
             });
         };
 
-        this.handleScopeClick = (isSelected, event) => {
+        this.handleScopeClick = (event, isSelected) => {
             const id = event.currentTarget.id;
             this.setState({ searchScope: id });
         };
@@ -368,7 +377,7 @@ export class SearchDatabase extends React.Component {
                         "-b", info.dn, info.isRole ? "role" : "account", "entry-status", info.dn];
                     log_cmd("processResults", "Checking if entry is activated", cmd);
                     cockpit
-                            .spawn(cmd, { superuser: true, err: 'message' })
+                            .spawn(cmd, { superuser: "require", err: 'message' })
                             .done(content => {
                                 if (info.isLockable) {
                                     const status = JSON.parse(content);
@@ -379,12 +388,12 @@ export class SearchDatabase extends React.Component {
                                 }
                             })
                             .fail(err => {
-                                const errMsg = JSON.parse(err);
-                                if ((info.isLockable) && !(errMsg.desc.includes("Root suffix can't be locked or unlocked"))) {
+                                const errMsg = getApiErrorMessage(err);
+                                if ((info.isLockable) && !(errMsg.includes("Root suffix can't be locked or unlocked"))) {
                                     console.error(
                                         "processResults",
                                         `${info.isRole ? "role" : "account"} account entry-status operation failed`,
-                                        errMsg.desc
+                                        errMsg
                                     );
                                     entryState = "error: please, check browser logs";
                                     entryStateIcon = <ExclamationCircleIcon className="ds-pf-red-color ct-exclamation-circle" />;
@@ -433,7 +442,9 @@ export class SearchDatabase extends React.Component {
                                         rawdn: info.dn,
                                         isLockable: info.isLockable,
                                         isRole: info.isRole,
-                                        entryState
+                                        entryState,
+                                        isUser: info.isUser,
+                                        userPwpLookup: info.userPwpLookup,
                                     },
                                     {
                                         parent: rowNumber,
@@ -479,7 +490,9 @@ export class SearchDatabase extends React.Component {
                                 info.modifyTimestamp,
                             ],
                             rawdn: info.dn,
-                            entryState: ""
+                            entryState: "",
+                            isUser: info.isUser,
+                            userPwpLookup: info.userPwpLookup,
                         },
                         {
                             parent: rowNumber,
@@ -534,7 +547,7 @@ export class SearchDatabase extends React.Component {
         });
     }
 
-    handleChange (e) {
+    handleChange (e, _str) {
         const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value.trim();
         this.setState({
             [e.target.id]: value,
@@ -574,7 +587,7 @@ export class SearchDatabase extends React.Component {
             "-b", entryDn, entryType, operationType, entryDn];
         log_cmd("handleLockUnlockEntry", `${operationType} entry`, cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: 'message' })
+                .spawn(cmd, { superuser: "require", err: 'message' })
                 .done(_ => {
                     this.setState({
                         entryMenuIsOpen: !this.state.entryMenuIsOpen,
@@ -585,15 +598,15 @@ export class SearchDatabase extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     console.error(
                         "handleLockUnlockEntry",
                         `${entryType} ${operationType} operation failed -`,
-                        errMsg.desc
+                        errMsg
                     );
                     this.props.addNotification(
-                        `${errMsg.desc.includes(`is already ${operationType === "unlock" ? "active" : "locked"}`) ? 'warning' : 'error'}`,
-                        `${errMsg.desc}`
+                        `${errMsg.includes(`is already ${operationType === "unlock" ? "active" : "locked"}`) ? 'warning' : 'error'}`,
+                        `${errMsg}`
                     );
                     this.setState({
                         entryMenuIsOpen: !this.state.entryMenuIsOpen,
@@ -716,6 +729,12 @@ export class SearchDatabase extends React.Component {
                     });
                 }
             },
+            ...(rowData.isUser && rowData.userPwpLookup ? [{
+                title: _("View Password Policy ..."),
+                onClick: () => {
+                    this.openPwpModal(rowData.rawdn, rowData.userPwpLookup);
+                }
+            }] : []),
             {
                 isSeparator: true
             },
@@ -779,6 +798,15 @@ export class SearchDatabase extends React.Component {
                         allObjectclasses={this.props.allObjectclasses}
                     />
                 )}
+                <EffectivePwpModal
+                    isOpen={this.state.showPwpModal}
+                    onClose={this.handlePwpModalClose}
+                    serverId={this.props.serverId}
+                    suffixList={this.props.suffixList}
+                    entryDn={this.state.pwpModalEntryDn}
+                    userType={this.state.pwpModalUserType}
+                    selector={this.state.pwpModalSelector}
+                />
                 <Form className="ds-margin-top-lg" isHorizontal autoComplete="off">
                     <Grid className="ds-margin-left">
                         <div className="ds-container">
@@ -788,11 +816,11 @@ export class SearchDatabase extends React.Component {
                                 </Text>
                             </TextContent>
                             <Grid className="ds-left-margin">
-                                <GridItem span={4}>
+                                <GridItem span={5}>
                                     <FormSelect
                                         id="searchSuffix"
                                         value={baseDN}
-                                        onChange={(value, event) => {
+                                        onChange={(event, value) => {
                                             this.handleSuffixChange(event);
                                         }}
                                         aria-label="FormSelect Input"
@@ -806,14 +834,14 @@ export class SearchDatabase extends React.Component {
                                             <FormSelectOption isDisabled key="No database" value="" label={_("No databases")} />}
                                     </FormSelect>
                                 </GridItem>
-                                <GridItem span={8}>
+                                <GridItem span={7}>
                                     { this.state.searchSuffix !== this.state.searchBase ? <Label onClose={this.handleClearSearchBase} className="ds-left-margin" color="blue">{this.state.searchBase}</Label> : "" }
                                 </GridItem>
                             </Grid>
                         </div>
                     </Grid>
                     <Grid className="ds-margin-left">
-                        <GridItem span={12}>
+                        <GridItem span={5}>
                             <div className="ds-container">
                                 <ToggleGroup aria-label="Default with single selectable">
                                     <ToggleGroupItem
@@ -821,20 +849,20 @@ export class SearchDatabase extends React.Component {
                                         text={_("Text")}
                                         buttonId="Search Text"
                                         isSelected={this.state.searchType === "Search Text"}
-                                        onChange={this.handleSearchTypeClick}
+                                        onChange={(event, isSelected) => this.handleSearchTypeClick(event, isSelected)}
                                     />
                                     <ToggleGroupItem
                                         title={_("Specific LDAP search filter for finding entries.")}
                                         text={_("Filter")}
                                         buttonId="Search Filter"
                                         isSelected={this.state.searchType === "Search Filter"}
-                                        onChange={this.handleSearchTypeClick}
+                                        onChange={(event, isSelected) => this.handleSearchTypeClick(event, isSelected)}
                                     />
                                 </ToggleGroup>
                                 <SearchInput
                                     placeholder={this.state.searchType === "Search Text" ? _("Enter search text ...") : _("Enter an LDAP search filter ...")}
                                     value={this.state.searchText}
-                                    onChange={this.handleSearchChange}
+                                    onChange={(evt, val) => this.handleSearchChange(evt, val)}
                                     onClear={(evt, val) => this.handleSearchChange(evt, '')}
                                     onSearch={this.handleSearch}
                                     className="ds-search-input"
@@ -846,7 +874,7 @@ export class SearchDatabase extends React.Component {
                     <ExpandableSection
                         className="ds-margin-left"
                         toggleText={this.state.isExpanded ? _("Hide Search Criteria") : _("Show Search Criteria")}
-                        onToggle={this.handleToggle}
+                        onToggle={(event, isExpanded) => this.handleToggle(event, isExpanded)}
                         isExpanded={this.state.isExpanded}
                         displaySize={this.state.isExpanded ? "large" : "default"}
                     >
@@ -861,14 +889,14 @@ export class SearchDatabase extends React.Component {
                                     id="searchBase"
                                     aria-describedby="searchBase"
                                     name={_("searchBase")}
-                                    onChange={(str, e) => {
+                                    onChange={(e, str) => {
                                         this.handleChange(e);
                                     }}
                                     validated={!valid_dn(this.state.searchBase) ? ValidatedOptions.error : ValidatedOptions.default}
                                 />
                             </GridItem>
                             <GridItem span={2} className="ds-left-margin ds-lower-field-md">
-                                <FormHelperText isError isHidden={valid_dn(this.state.searchBase)}>
+                                <FormHelperText  >
                                     {_("Invalid DN syntax")}
                                 </FormHelperText>
                             </GridItem>
@@ -884,21 +912,21 @@ export class SearchDatabase extends React.Component {
                                         text={_("Subtree")}
                                         buttonId="sub"
                                         isSelected={this.state.searchScope === "sub"}
-                                        onChange={this.handleScopeClick}
+                                        onChange={(evt, val) => this.handleScopeClick(evt, val)}
                                         title={_("Search for entries starting at the search base, and including all its child entries")}
                                     />
                                     <ToggleGroupItem
                                         text={_("One Level")}
                                         buttonId="one"
                                         isSelected={this.state.searchScope === "one"}
-                                        onChange={this.handleScopeClick}
+                                        onChange={(evt, val) => this.handleScopeClick(evt, val)}
                                         title={_("Search for entries starting at the search base, and include only the first level of child entries")}
                                     />
                                     <ToggleGroupItem
                                         text={_("Base")}
                                         buttonId="base"
                                         isSelected={this.state.searchScope === "base"}
-                                        onChange={this.handleScopeClick}
+                                        onChange={(evt, val) => this.handleScopeClick(evt, val)}
                                         title={_("Search for an exact entry (search base). This does not include child entries.")}
                                     />
                                 </ToggleGroup>
@@ -949,7 +977,7 @@ export class SearchDatabase extends React.Component {
                                 {_("Show Locking")}
                             </GridItem>
                             <GridItem span={10}>
-                                <Switch id="no-label-switch-on" aria-label="Message when on" isChecked={this.state.checkIfLocked} onChange={this.handleChangeSwitch} />
+                                <Switch id="no-label-switch-on" aria-label="Message when on" isChecked={this.state.checkIfLocked} onChange={(event, val) => this.handleChangeSwitch(event, val)} />
                             </GridItem>
                         </Grid>
                         <div hidden={this.state.searchType === "Search Filter"}>
@@ -968,7 +996,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("cn")}
                                             id="cn"
                                             isChecked={this.state.cn}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="cn"
@@ -979,7 +1007,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("uid")}
                                             id="uid"
                                             isChecked={this.state.uid}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="uid"
@@ -990,7 +1018,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("sn")}
                                             id="sn"
                                             isChecked={this.state.sn}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="sn"
@@ -1003,7 +1031,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("givenName")}
                                             id="givenName"
                                             isChecked={this.state.givenName}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="givenName"
@@ -1014,7 +1042,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("mail")}
                                             id="mail"
                                             isChecked={this.state.mail}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="mail"
@@ -1025,7 +1053,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("displayName")}
                                             id="displayName"
                                             isChecked={this.state.displayName}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="displayName"
@@ -1038,7 +1066,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("legalName")}
                                             id="legalName"
                                             isChecked={this.state.legalName}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="legalName"
@@ -1049,7 +1077,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("memberOf")}
                                             id="memberOf"
                                             isChecked={this.state.memberOf}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="memberOf"
@@ -1060,7 +1088,7 @@ export class SearchDatabase extends React.Component {
                                             label={_("member")}
                                             id="member"
                                             isChecked={this.state.member}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="member"
@@ -1073,36 +1101,30 @@ export class SearchDatabase extends React.Component {
                                             label={_("uniqueMember")}
                                             id="uniqueMember"
                                             isChecked={this.state.uniqueMember}
-                                            onChange={(checked, e) => {
+                                            onChange={(e, checked) => {
                                                 this.handleChange(e);
                                             }}
                                             aria-label="uniqueMember"
                                         />
                                     </GridItem>
                                 </Grid>
-                                <Grid className="ds-margin-left ds-margin-top" title={_("Enter space or comma separateed list of attributes to search.")}>
+                                <Grid className="ds-margin-left ds-margin-top" title={_("Enter space or comma separated list of attributes to search.")}>
                                     <GridItem span={8}>
-                                        <Select
-                                            variant={SelectVariant.typeaheadMulti}
-                                            typeAheadAriaLabel="Type attributes to include in filter ..."
-                                            onToggle={this.handleCustomAttrToggle}
+                                        <TypeaheadSelect
+                                            selected={this.state.customSearchAttrs}
                                             onSelect={this.handleCustomAttrChange}
                                             onClear={this.handleCustomAttrClear}
-                                            selections={this.state.customSearchAttrs}
+                                            options={this.props.attributes}
                                             isOpen={this.state.isCustomAttrOpen}
-                                            aria-labelledby="typeAhead-attr-filter"
-                                            placeholderText={_("Type attributes to include in the filter ...")}
-                                            noResultsFoundText="There are no matching attributes"
-                                        >
-                                            {this.props.attributes.map((attr, index) => (
-                                                <SelectOption
-                                                    key={index}
-                                                    value={attr}
-                                                />
-                                            ))}
-                                        </Select>
+                                            onToggle={this.handleCustomAttrToggle}
+                                            placeholder={_("Type attributes to include in the filter ...")}
+                                            noResultsText="There are no matching attributes"
+                                            ariaLabel="Type attributes to include in filter ..."
+                                            isMulti={true}
+                                        />
                                     </GridItem>
                                 </Grid>
+                                <hr />
                             </div>
                         </div>
                     </ExpandableSection>
@@ -1116,7 +1138,7 @@ export class SearchDatabase extends React.Component {
                         </TextContent>
                         <Spinner className="ds-margin-top-lg" size="xl" />
                     </div>
-                    <div className={searching ? "ds-hidden" : ""}>
+                    <div className={searching ? "ds-hidden" : "ds-margin-top"}>
                         <center>
                             <p><b>{_("Results:")}</b> {total}</p>
                         </center>

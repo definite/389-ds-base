@@ -12,6 +12,7 @@ import {
     ValidatedOptions,
 } from "@patternfly/react-core";
 import PropTypes from "prop-types";
+import { DsNumberInput } from "../dsNumberInput.jsx";
 
 const _ = cockpit.gettext;
 
@@ -70,14 +71,14 @@ export class SASLMappingModal extends React.Component {
                                 id="saslMapName"
                                 aria-describedby="horizontal-form-name-helper"
                                 name="saslMapName"
-                                onChange={(str, e) => {
+                                onChange={(e, str) => {
                                     this.props.handleChange(e);
                                 }}
                                 validated={this.props.error.saslMapName ? ValidatedOptions.error : ValidatedOptions.default}
                                 isRequired
                                 isDisabled={this.props.type === "Edit"}
                             />
-                            <FormHelperText isError isHidden={!this.props.error.saslMapName}>
+                            <FormHelperText  >
                                 {_("You must provide a name for this mapping")}
                             </FormHelperText>
                         </GridItem>
@@ -95,13 +96,13 @@ export class SASLMappingModal extends React.Component {
                                 id="saslMapRegex"
                                 aria-describedby="horizontal-form-name-helper"
                                 name="saslMapRegex"
-                                onChange={(str, e) => {
+                                onChange={(e, str) => {
                                     this.props.handleChange(e);
                                 }}
                                 isRequired
                                 validated={this.props.error.saslMapRegex ? ValidatedOptions.error : ValidatedOptions.default}
                             />
-                            <FormHelperText isError isHidden={!this.props.error.saslMapRegex}>
+                            <FormHelperText  >
                                 {_("You must provide a valid regular expression")}
                             </FormHelperText>
                         </GridItem>
@@ -119,7 +120,7 @@ export class SASLMappingModal extends React.Component {
                                 id="saslTestText"
                                 aria-describedby="horizontal-form-name-helper"
                                 name="saslTestText"
-                                onChange={(str, e) => {
+                                onChange={(e, str) => {
                                     this.props.handleChange(e);
                                 }}
                                 placeholder={_("Enter text to test regex")}
@@ -149,13 +150,13 @@ export class SASLMappingModal extends React.Component {
                                 id="saslBase"
                                 aria-describedby="horizontal-form-name-helper"
                                 name="saslBase"
-                                onChange={(str, e) => {
+                                onChange={(e, str) => {
                                     this.props.handleChange(e);
                                 }}
                                 isRequired
                                 validated={this.props.error.saslBase ? ValidatedOptions.error : ValidatedOptions.default}
                             />
-                            <FormHelperText isError isHidden={!this.props.error.saslBase}>
+                            <FormHelperText  >
                                 {_("You must provide a search base")}
                             </FormHelperText>
                         </GridItem>
@@ -173,13 +174,13 @@ export class SASLMappingModal extends React.Component {
                                 id="saslFilter"
                                 aria-describedby="horizontal-form-name-helper"
                                 name="saslFilter"
-                                onChange={(str, e) => {
+                                onChange={(e, str) => {
                                     this.props.handleChange(e);
                                 }}
                                 isRequired
                                 validated={this.props.error.saslFilter ? ValidatedOptions.error : ValidatedOptions.default}
                             />
-                            <FormHelperText isError isHidden={!this.props.error.saslFilter}>
+                            <FormHelperText  >
                                 {_("You must provide an LDAP search filter")}
                             </FormHelperText>
                         </GridItem>
@@ -191,18 +192,17 @@ export class SASLMappingModal extends React.Component {
                             {_("SASL Mapping Priority")}
                         </GridItem>
                         <GridItem span={9}>
-                            <TextInput
+                            <DsNumberInput
                                 value={this.props.priority}
-                                type="number"
                                 id="saslPriority"
-                                aria-describedby="horizontal-form-name-helper"
-                                name="saslPriority"
-                                onChange={(str, e) => {
+                                min={1}
+                                max={100}
+                                validated={this.props.error.saslPriority ? ValidatedOptions.error : ValidatedOptions.default}
+                                onChange={(e) => {
                                     this.props.handleChange(e);
                                 }}
-                                validated={this.props.error.saslPriority ? ValidatedOptions.error : ValidatedOptions.default}
                             />
-                            <FormHelperText isError isHidden={!this.props.error.saslPriority}>
+                            <FormHelperText  >
                                 {_("Priority must be between 1 and 100")}
                             </FormHelperText>
                         </GridItem>

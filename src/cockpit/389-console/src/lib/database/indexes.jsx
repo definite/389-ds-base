@@ -2,25 +2,23 @@ import cockpit from "cockpit";
 import React from "react";
 import { DoubleConfirmModal } from "../notifications.jsx";
 import { IndexTable } from "./databaseTables.jsx";
-import { log_cmd } from "../tools.jsx";
+import { log_cmd, getApiErrorMessage } from "../tools.jsx";
 import {
-    Button,
-    Checkbox,
-    Form,
-    Grid,
-    GridItem,
-    Modal,
-    ModalVariant,
-    Select,
-    SelectVariant,
-    SelectOption,
-    Tab,
-    Tabs,
-    TabTitleText,
-    Text,
-    TextContent,
-    TextVariants,
-} from "@patternfly/react-core";
+	Button,
+	Checkbox,
+	Form,
+	Grid,
+	GridItem,
+	Modal,
+	ModalVariant,
+	Tab,
+	Tabs,
+	TabTitleText,
+	Text,
+	TextContent,
+	TextVariants
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
 import PropTypes from "prop-types";
 
 const _ = cockpit.gettext;
@@ -72,23 +70,11 @@ export class SuffixIndexes extends React.Component {
 
         // Select Attribute
         this.handleAttributeSelect = (event, selection) => {
-            if (this.state.indexName.includes(selection)) {
-                this.setState(
-                    (prevState) => ({
-                        indexName: prevState.indexName.filter((item) => item !== selection),
-                        isAttributeOpen: false
-                    }), () => { this.validateSaveBtn() }
-                );
-            } else {
-                this.setState(
-                    (prevState) => ({
-                        indexName: [...prevState.indexName, selection],
-                        isAttributeOpen: false
-                    }), () => { this.validateSaveBtn() }
-                );
-            }
+            this.setState({
+                indexName: Array.isArray(selection) ? selection : [selection],
+            }, () => { this.validateSaveBtn() });
         };
-        this.handleAttributeToggle = isAttributeOpen => {
+        this.handleAttributeToggle = (_event, isAttributeOpen) => {
             this.setState({
                 isAttributeOpen
             });
@@ -100,7 +86,7 @@ export class SuffixIndexes extends React.Component {
             });
         };
 
-        this.handleMatchingruleAddToggle = isMatchingruleOpen => {
+        this.handleMatchingruleAddToggle = (_event, isMatchingruleOpen) => {
             this.setState({
                 isMatchingruleOpen
             });
@@ -112,7 +98,7 @@ export class SuffixIndexes extends React.Component {
             });
         };
 
-        this.handleMatchingruleEditToggle = isMatchingruleOpen => {
+        this.handleMatchingruleEditToggle = (_event, isMatchingruleOpen) => {
             this.setState({
                 isMatchingruleOpen
             });
@@ -162,7 +148,7 @@ export class SuffixIndexes extends React.Component {
         ];
         log_cmd("loadIndexes (suffix config)", "Get matching rules", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const mrContent = JSON.parse(content);
                     const mrs = [];
@@ -178,7 +164,7 @@ export class SuffixIndexes extends React.Component {
                     ];
                     log_cmd("loadIndexes (suffix config)", "Get current index list", idx_cmd);
                     cockpit
-                            .spawn(idx_cmd, { superuser: true, err: "message" })
+                            .spawn(idx_cmd, { superuser: "require", err: "message" })
                             .done(content => {
                                 const idxContent = JSON.parse(content);
                                 const indexList = idxContent.items;
@@ -188,7 +174,7 @@ export class SuffixIndexes extends React.Component {
                                 ];
                                 log_cmd("loadIndexes (suffix config)", "Get attrs", attr_cmd);
                                 cockpit
-                                        .spawn(attr_cmd, { superuser: true, err: "message" })
+                                        .spawn(attr_cmd, { superuser: "require", err: "message" })
                                         .done(content => {
                                             const attrContent = JSON.parse(content);
                                             const attrs = [];
@@ -208,19 +194,19 @@ export class SuffixIndexes extends React.Component {
                                             }
                                         })
                                         .fail(err => {
-                                            const errMsg = JSON.parse(err);
+                                            const errMsg = getApiErrorMessage(err);
                                             this.props.addNotification(
                                                 "error",
-                                                cockpit.format(_("Failed to get attributes - $0"), errMsg.desc)
+                                                cockpit.format(_("Failed to get attributes - $0"), errMsg)
                                             );
                                         });
                             });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to get matching rules - $0"), errMsg.desc)
+                        cockpit.format(_("Failed to get matching rules - $0"), errMsg)
                     );
                 });
     }
@@ -300,21 +286,9 @@ export class SuffixIndexes extends React.Component {
 
     // Edit Matching Rules
     handleMatchingruleSelect(event, selection) {
-        const new_mrs = [...this.state.mrs];
-        if (new_mrs.includes(selection)) {
-            const index = new_mrs.indexOf(selection);
-            new_mrs.splice(index, 1);
-            this.setState({
-                mrs: new_mrs,
-                isMatchingruleOpen: false,
-            }, () => { this.validateSaveBtn() });
-        } else {
-            new_mrs.push(selection);
-            this.setState({
-                mrs: new_mrs,
-                isMatchingruleOpen: false,
-            }, () => { this.validateSaveBtn() });
-        }
+        this.setState({
+            mrs: Array.isArray(selection) ? selection : [],
+        }, () => { this.validateSaveBtn() });
     }
 
     saveIndex() {
@@ -349,7 +323,7 @@ export class SuffixIndexes extends React.Component {
 
         log_cmd("saveIndex", "Create new index", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     // this.loadIndexes();
                     this.props.reload(this.props.suffix);
@@ -367,12 +341,12 @@ export class SuffixIndexes extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.reload(this.props.suffix);
                     this.closeIndexModal();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error creating index - $0"), errMsg.desc)
+                        cockpit.format(_("Error creating index - $0"), errMsg)
                     );
                     this.setState({
                         saving: false,
@@ -436,7 +410,7 @@ export class SuffixIndexes extends React.Component {
         });
         log_cmd("reindexAttr", "index attribute", reindex_cmd);
         cockpit
-                .spawn(reindex_cmd, { superuser: true, err: "message" })
+                .spawn(reindex_cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -449,10 +423,10 @@ export class SuffixIndexes extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error indexing attribute $0 - $1"), attr, errMsg.desc)
+                        cockpit.format(_("Error indexing attribute $0 - $1"), attr, errMsg)
                     );
                     this.setState({
                         saving: false,
@@ -527,7 +501,7 @@ export class SuffixIndexes extends React.Component {
             });
             log_cmd("saveEditIndex", "Edit index", cmd);
             cockpit
-                    .spawn(cmd, { superuser: true, err: "message" })
+                    .spawn(cmd, { superuser: "require", err: "message" })
                     .done(content => {
                         this.props.reload(this.props.suffix);
                         this.closeEditIndexModal();
@@ -544,12 +518,12 @@ export class SuffixIndexes extends React.Component {
                         }
                     })
                     .fail(err => {
-                        const errMsg = JSON.parse(err);
+                        const errMsg = getApiErrorMessage(err);
                         this.props.reload(this.props.suffix);
                         this.closeEditIndexModal();
                         this.props.addNotification(
                             "error",
-                            cockpit.format(_("Error editing index - $0"), errMsg.desc)
+                            cockpit.format(_("Error editing index - $0"), errMsg)
                         );
                         this.setState({
                             saving: false,
@@ -608,7 +582,7 @@ export class SuffixIndexes extends React.Component {
         });
         log_cmd("deleteIndex", "deleteEdit index", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -618,17 +592,17 @@ export class SuffixIndexes extends React.Component {
                     this.closeConfirmDeleteIndex();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.reload(this.props.suffix);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error deleting index - $0"), errMsg.desc)
+                        cockpit.format(_("Error deleting index - $0"), errMsg)
                     );
                     this.closeConfirmDeleteIndex();
                 });
     }
 
-    onSelectToggle = (isExpanded, toggleId) => {
+    onSelectToggle = (_event, isExpanded, toggleId) => {
         this.setState({
             [toggleId]: isExpanded
         });
@@ -677,6 +651,7 @@ export class SuffixIndexes extends React.Component {
                                 variant="primary"
                                 type="button"
                                 onClick={this.handleShowIndexModal}
+                                className="ds-margin-top"
                             >
                                 {_("Add Index")}
                             </Button>
@@ -836,26 +811,18 @@ class AddIndexModal extends React.Component {
                             {_("Select An Attribute")}
                         </Text>
                     </TextContent>
-                    <Select
-                        variant={SelectVariant.typeahead}
-                        typeAheadAriaLabel={_("Type a attribute name to index")}
-                        onToggle={onAttributeToggle}
-                        onClear={onAttributeClear}
+                    <TypeaheadSelect
+                        selected={attributeName}
                         onSelect={onAttributeSelect}
-                        selections={attributeName}
+                        onClear={onAttributeClear}
+                        options={availAttrs}
                         isOpen={isAttributeOpen}
-                        aria-labelledby="typeAhead-attr-add"
-                        placeholderText={_("Type a attribute name to index..")}
-                        noResultsFoundText={_("There are no matching entries")}
+                        onToggle={onAttributeToggle}
+                        placeholder={_("Type a attribute name to index..")}
+                        noResultsText={_("There are no matching entries")}
+                        ariaLabel={_("Type a attribute name to index")}
                         validated={attributeName.length === 0 || attributeName[0] === "" ? "error" : "default"}
-                    >
-                        {availAttrs.map((attr, index) => (
-                            <SelectOption
-                                key={index}
-                                value={attr}
-                            />
-                        ))}
-                    </Select>
+                    />
                     <TextContent className="ds-margin-top">
                         <Text component={TextVariants.h4}>
                             {_("Index Types")}
@@ -867,10 +834,10 @@ class AddIndexModal extends React.Component {
                                 <Checkbox
                                     id="indexTypeEq"
                                     isChecked={this.props.indexTypeEq}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         handleChange(e);
                                     }}
-                                    label={_("Equailty Indexing")}
+                                    label={_("Equality Indexing")}
                                 />
                             </GridItem>
                         </Grid>
@@ -879,7 +846,7 @@ class AddIndexModal extends React.Component {
                                 <Checkbox
                                     id="indexTypePres"
                                     isChecked={this.props.indexTypePres}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         handleChange(e);
                                     }}
                                     label={_("Presence Indexing")}
@@ -891,7 +858,7 @@ class AddIndexModal extends React.Component {
                                 <Checkbox
                                     id="indexTypeSub"
                                     isChecked={this.props.indexTypeSub}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         handleChange(e);
                                     }}
                                     label={_("Substring Indexing")}
@@ -903,7 +870,7 @@ class AddIndexModal extends React.Component {
                                 <Checkbox
                                     id="indexTypeApprox"
                                     isChecked={this.props.indexTypeApprox}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         handleChange(e);
                                     }}
                                     label={_("Approximate Indexing")}
@@ -919,26 +886,18 @@ class AddIndexModal extends React.Component {
                                 </Text>
                             </TextContent>
                             <div className="ds-indent ds-margin-top">
-                                <Select
-                                    id="addMatchingRules"
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type a matching rule name"
-                                    onToggle={onMatchingruleAddToggle}
+                                <TypeaheadSelect
+                                    selected={mrs}
                                     onSelect={onMatchingruleSelect}
                                     onClear={onMatchingruleAddClear}
-                                    selections={mrs}
+                                    options={availMR}
                                     isOpen={isMatchingruleOpen}
-                                    aria-labelledby="typeAhead-mr-add"
-                                    placeholderText={_("Type a matching rule name...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                >
-                                    {availMR.map((mrs, index) => (
-                                        <SelectOption
-                                           key={index}
-                                           value={mrs}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={onMatchingruleAddToggle}
+                                    placeholder={_("Type a matching rule name...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type a matching rule name"
+                                    isMulti={true}
+                                />
                             </div>
                         </GridItem>
                     </Grid>
@@ -947,7 +906,7 @@ class AddIndexModal extends React.Component {
                             <Checkbox
                                 id="reindexOnAdd"
                                 isChecked={this.props.reindexOnAdd}
-                                onChange={(checked, e) => {
+                                onChange={(e, checked) => {
                                     handleChange(e);
                                 }}
                                 label={_("Index attribute after creation")}
@@ -1008,10 +967,10 @@ class EditIndexModal extends React.Component {
                 <Checkbox
                 id="indexTypeEq"
                 isChecked={this.props.indexTypeEq}
-                onChange={(checked, e) => {
+                onChange={(e, checked) => {
                     handleChange(e);
                 }}
-                label={_("Equailty Indexing")}
+                label={_("Equality Indexing")}
                 />
             </div>
         );
@@ -1020,7 +979,7 @@ class EditIndexModal extends React.Component {
                 <Checkbox
                 id="indexTypePres"
                 isChecked={this.props.indexTypePres}
-                onChange={(checked, e) => {
+                onChange={(e, checked) => {
                     handleChange(e);
                 }}
                 label={_("Presence Indexing")}
@@ -1032,7 +991,7 @@ class EditIndexModal extends React.Component {
                 <Checkbox
                 id="indexTypeSub"
                 isChecked={this.props.indexTypeSub}
-                onChange={(checked, e) => {
+                onChange={(e, checked) => {
                     handleChange(e);
                 }}
                 label={_("Substring Indexing")}
@@ -1044,7 +1003,7 @@ class EditIndexModal extends React.Component {
                 <Checkbox
                 id="indexTypeApprox"
                 isChecked={this.props.indexTypeApprox}
-                onChange={(checked, e) => {
+                onChange={(e, checked) => {
                     handleChange(e);
                 }}
                 label={_("Approximate Indexing")}
@@ -1058,7 +1017,7 @@ class EditIndexModal extends React.Component {
                     <Checkbox
                     id="indexTypeEq"
                     isChecked={this.props.indexTypeEq}
-                    onChange={(checked, e) => {
+                    onChange={(e, checked) => {
                         handleChange(e);
                     }}
                     label={_("Equality Indexing")}
@@ -1072,7 +1031,7 @@ class EditIndexModal extends React.Component {
                     <Checkbox
                     id="indexTypePres"
                     isChecked={this.props.indexTypePres}
-                    onChange={(checked, e) => {
+                    onChange={(e, checked) => {
                         handleChange(e);
                     }}
                     label={_("Presence Indexing")}
@@ -1086,7 +1045,7 @@ class EditIndexModal extends React.Component {
                     <Checkbox
                     id="indexTypeSub"
                     isChecked={this.props.indexTypeSub}
-                    onChange={(checked, e) => {
+                    onChange={(e, checked) => {
                         handleChange(e);
                     }}
                     label={_("Substring Indexing")}
@@ -1100,7 +1059,7 @@ class EditIndexModal extends React.Component {
                     <Checkbox
                     id="indexTypeApprox"
                     isChecked={this.props.indexTypeApprox}
-                    onChange={(checked, e) => {
+                    onChange={(e, checked) => {
                         handleChange(e);
                     }}
                     label={_("Approximate Indexing")}
@@ -1171,25 +1130,18 @@ class EditIndexModal extends React.Component {
                                 </Text>
                             </TextContent>
                             <div className="ds-indent ds-margin-top">
-                                <Select
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type a matching rule name"
-                                    onToggle={onMatchingruleEditToggle}
+                                <TypeaheadSelect
+                                    selected={currentMrs}
                                     onSelect={onMatchingruleSelect}
                                     onClear={onMatchingruleEditClear}
-                                    selections={currentMrs}
+                                    options={availMR}
                                     isOpen={isMatchingruleOpen}
-                                    aria-labelledby="typeAhead-mr-edit"
-                                    placeholderText={_("Type a matching rule name...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                >
-                                    {availMR.map((mr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={mr}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={onMatchingruleEditToggle}
+                                    placeholder={_("Type a matching rule name...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type a matching rule name"
+                                    isMulti={true}
+                                />
                             </div>
                         </GridItem>
                     </Grid>
@@ -1198,7 +1150,7 @@ class EditIndexModal extends React.Component {
                             <Checkbox
                                 id="reindexOnAdd"
                                 isChecked={this.props.reindexOnAdd}
-                                onChange={(checked, e) => {
+                                onChange={(e, checked) => {
                                     handleChange(e);
                                 }}
                                 label={_("Reindex Attribute After Saving")}

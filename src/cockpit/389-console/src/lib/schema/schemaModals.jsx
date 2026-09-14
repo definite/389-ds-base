@@ -1,21 +1,19 @@
 import cockpit from "cockpit";
 import React from "react";
 import {
-    Button,
-    Checkbox,
-    Form,
-    FormSelect,
-    FormSelectOption,
-    Grid,
-    GridItem,
-    Modal,
-    ModalVariant,
-    Select,
-    SelectVariant,
-    SelectOption,
-    TextInput,
-    ValidatedOptions,
-} from "@patternfly/react-core";
+	Button,
+	Checkbox,
+	Form,
+	FormSelect,
+	FormSelectOption,
+	Grid,
+	GridItem,
+	Modal,
+	ModalVariant,
+	TextInput,
+	ValidatedOptions
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
 import PropTypes from "prop-types";
 
 const _ = cockpit.gettext;
@@ -116,7 +114,7 @@ class ObjectClassModal extends React.Component {
                                     id="ocName"
                                     aria-describedby="horizontal-form-name-helper"
                                     name="ocName"
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     validated={error.ocName ? ValidatedOptions.error : ValidatedOptions.default}
                                     isDisabled={!newOcEntry}
                                 />
@@ -133,7 +131,7 @@ class ObjectClassModal extends React.Component {
                                     id="ocDesc"
                                     aria-describedby="horizontal-form-name-helper"
                                     name="ocDesc"
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     validated={error.ocDesc ? ValidatedOptions.error : ValidatedOptions.default}
                                 />
                             </GridItem>
@@ -150,7 +148,7 @@ class ObjectClassModal extends React.Component {
                                     aria-describedby="horizontal-form-name-helper"
                                     name="ocOID"
                                     isDisabled={ocModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                 />
                             </GridItem>
                         </Grid>
@@ -163,7 +161,7 @@ class ObjectClassModal extends React.Component {
                                     id="ocParent"
                                     value={ocParent}
                                     isDisabled={ocModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     aria-label="FormSelect Input"
                                 >
                                     {objectclasses.map((obj, index) => (
@@ -181,7 +179,7 @@ class ObjectClassModal extends React.Component {
                                     id="ocKind"
                                     value={ocKind}
                                     isDisabled={ocModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     aria-label="FormSelect Input"
                                 >
                                     <FormSelectOption key={0} value="STRUCTURAL" label="STRUCTURAL" />
@@ -195,30 +193,20 @@ class ObjectClassModal extends React.Component {
                                 {_("Required Attributes")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type an attribute name"
-                                    onToggle={onRequiredAttrsToggle}
+                                <TypeaheadSelect
+                                    selected={ocMust}
                                     onSelect={onRequiredAttrsSelect}
                                     onClear={onRequiredAttrsClear}
-                                    selections={ocMust}
-                                    id="ocMust"
+                                    options={attributes}
                                     isOpen={isRequiredAttrsOpen}
-                                    aria-labelledby="typeAhead-required-attrs"
-                                    placeholderText={_("Type an attribute name...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                    isCreatable
+                                    onToggle={onRequiredAttrsToggle}
+                                    placeholder={_("Type an attribute name...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type an attribute name"
+                                    isMulti={true}
+                                    isCreatable={true}
                                     onCreateOption={onRequiredAttrsCreateOption}
-                                    direction="up"
-                                    maxHeight="225px"
-                                >
-                                    {attributes.map((attr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={attr}
-                                        />
-                                    ))}
-                                </Select>
+                                />
                             </GridItem>
                         </Grid>
                         <Grid title={_("A may attribute name")}>
@@ -226,30 +214,20 @@ class ObjectClassModal extends React.Component {
                                 {_("Allowed Attributes")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type an attribute name"
-                                    onToggle={onAllowedAttrsToggle}
+                                <TypeaheadSelect
+                                    selected={ocMay}
                                     onSelect={onAllowedAttrsSelect}
                                     onClear={onAllowedAttrsClear}
-                                    selections={ocMay}
-                                    id="ocMay"
+                                    options={attributes}
                                     isOpen={isAllowedAttrsOpen}
-                                    aria-labelledby="typeAhead-allowed-attrs"
-                                    placeholderText={_("Type an attribute name...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                    isCreatable
+                                    onToggle={onAllowedAttrsToggle}
+                                    placeholder={_("Type an attribute name...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type an attribute name"
+                                    isMulti={true}
+                                    isCreatable={true}
                                     onCreateOption={onAllowedAttrsCreateOption}
-                                    direction="up"
-                                    maxHeight="225px"
-                                >
-                                    {attributes.map((attr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={attr}
-                                        />
-                                    ))}
-                                </Select>
+                                />
                             </GridItem>
                         </Grid>
                     </Form>
@@ -409,7 +387,7 @@ class AttributeTypeModal extends React.Component {
                                     aria-describedby="horizontal-form-name-helper"
                                     name="atName"
                                     isDisabled={!newAtEntry}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     validated={error.atName ? ValidatedOptions.error : ValidatedOptions.default}
                                 />
                             </GridItem>
@@ -426,7 +404,7 @@ class AttributeTypeModal extends React.Component {
                                     aria-describedby="horizontal-form-name-helper"
                                     name="atDesc"
                                     isDisabled={atModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     validated={error.atDesc ? ValidatedOptions.error : ValidatedOptions.default}
                                 />
                             </GridItem>
@@ -443,7 +421,7 @@ class AttributeTypeModal extends React.Component {
                                     aria-describedby="horizontal-form-name-helper"
                                     name="atOID"
                                     isDisabled={atModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                 />
                             </GridItem>
                         </Grid>
@@ -452,25 +430,17 @@ class AttributeTypeModal extends React.Component {
                                 {_("Parent Attribute")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeahead}
-                                    typeAheadAriaLabel="Type an attribute name"
-                                    onToggle={onParentAttrToggle}
+                                <TypeaheadSelect
+                                    selected={atParent}
                                     onSelect={onParentAttrSelect}
                                     onClear={onParentAttrClear}
-                                    selections={atParent}
+                                    options={attributes}
                                     isOpen={isParentAttrOpen}
-                                    aria-labelledby="typeAhead-parent-attr"
-                                    placeholderText={_("Type an attribute name...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                >
-                                    {attributes.map((attr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={attr}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={onParentAttrToggle}
+                                    placeholder={_("Type an attribute name...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type an attribute name"
+                                />
                             </GridItem>
                         </Grid>
                         <Grid title={_("An attribute's syntax")}>
@@ -482,7 +452,7 @@ class AttributeTypeModal extends React.Component {
                                     id="atSyntax"
                                     value={atSyntax}
                                     isDisabled={atModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     aria-label="FormSelect Input"
                                 >
                                     {syntaxes.map((syntax, index) => (
@@ -500,7 +470,7 @@ class AttributeTypeModal extends React.Component {
                                     id="atUsage"
                                     value={atUsage}
                                     isDisabled={atModalViewOnly}
-                                    onChange={(str, e) => { handleFieldChange(e) }}
+                                    onChange={(e, str) => { handleFieldChange(e) }}
                                     aria-label="FormSelect Input"
                                 >
                                     <FormSelectOption key={0} value="userApplications" label="userApplications" />
@@ -519,7 +489,7 @@ class AttributeTypeModal extends React.Component {
                                     id="atMultivalued"
                                     isChecked={atMultivalued}
                                     title={_("If attribute can have a multiple values")}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         handleFieldChange(e);
                                     }}
                                     isDisabled={atModalViewOnly}
@@ -535,7 +505,7 @@ class AttributeTypeModal extends React.Component {
                                     id="atNoUserMod"
                                     isChecked={atNoUserMod}
                                     title={_("If attribute is not modifiable by a client application")}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         handleFieldChange(e);
                                     }}
                                     isDisabled={atModalViewOnly}
@@ -547,27 +517,20 @@ class AttributeTypeModal extends React.Component {
                                 {_("Alias Names")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type an alias name"
-                                    onToggle={onAliasNameToggle}
+                                <TypeaheadSelect
+                                    selected={atAlias}
                                     onSelect={onAliasNameSelect}
                                     onClear={onAliasNameClear}
-                                    selections={atAlias}
+                                    options={atAlias}
                                     isOpen={isAliasNameOpen}
-                                    aria-labelledby="typeAhead-alias-name"
-                                    placeholderText={_("Type an alias name...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                    isCreatable
+                                    onToggle={onAliasNameToggle}
+                                    placeholder={_("Type an alias name...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type an alias name"
+                                    isMulti={true}
+                                    isCreatable={true}
                                     onCreateOption={onAliasNameCreateOption}
-                                >
-                                    {atAlias.map((alias, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={alias}
-                                        />
-                                    ))}
-                                </Select>
+                                />
                             </GridItem>
                         </Grid>
 
@@ -576,25 +539,17 @@ class AttributeTypeModal extends React.Component {
                                 {_("Equality Matching Rule")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeahead}
-                                    typeAheadAriaLabel="Type a matching rule"
-                                    onToggle={onEqualityMRToggle}
+                                <TypeaheadSelect
+                                    selected={atEqMr}
                                     onSelect={onEqualityMRSelect}
                                     onClear={onEqualityMRClear}
-                                    selections={atEqMr}
+                                    options={matchingrules}
                                     isOpen={isEqualityMROpen}
-                                    aria-labelledby="typeAhead-equality-mr"
-                                    placeholderText={_("Type an Equality matching rule...")}
-                                    noResultsFoundText={_("There are no matching rules")}
-                                >
-                                    {matchingrules.map((mr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={mr}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={onEqualityMRToggle}
+                                    placeholder={_("Type an Equality matching rule...")}
+                                    noResultsText={_("There are no matching rules")}
+                                    ariaLabel="Type a matching rule"
+                                />
                             </GridItem>
                         </Grid>
                         <Grid title={_("An order matching rule")}>
@@ -602,25 +557,17 @@ class AttributeTypeModal extends React.Component {
                                 {_("Order Matching Rule")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeahead}
-                                    typeAheadAriaLabel="Type a matching rule"
-                                    onToggle={onOrderMRToggle}
+                                <TypeaheadSelect
+                                    selected={atOrder}
                                     onSelect={onOrderMRSelect}
                                     onClear={onOrderMRClear}
-                                    selections={atOrder}
+                                    options={matchingrules}
                                     isOpen={isOrderMROpen}
-                                    aria-labelledby="typeAhead-order-mr"
-                                    placeholderText={_("Type an Ordering matching rule..")}
-                                    noResultsFoundText={_("There are no matching rules")}
-                                >
-                                    {matchingrules.map((mr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={mr}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={onOrderMRToggle}
+                                    placeholder={_("Type an Ordering matching rule..")}
+                                    noResultsText={_("There are no matching rules")}
+                                    ariaLabel="Type a matching rule"
+                                />
                             </GridItem>
                         </Grid>
                         <Grid title={_("A substring matching rule")}>
@@ -628,24 +575,17 @@ class AttributeTypeModal extends React.Component {
                                 {_("Substring Matching Rule")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeahead}
-                                    typeAheadAriaLabel="Type a matching rule"
-                                    onToggle={onSubstringMRToggle}
+                                <TypeaheadSelect
+                                    selected={atSubMr}
                                     onSelect={onSubstringMRSelect}
                                     onClear={onSubstringMRClear}
-                                    selections={atSubMr}
+                                    options={matchingrules}
                                     isOpen={isSubstringMROpen}
-                                    placeholderText={_("Type a Substring matching rule...")}
-                                    noResultsFoundText={_("There are no matching rules")}
-                                >
-                                    {matchingrules.map((mr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={mr}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={onSubstringMRToggle}
+                                    placeholder={_("Type a Substring matching rule...")}
+                                    noResultsText={_("There are no matching rules")}
+                                    ariaLabel="Type a matching rule"
+                                />
                             </GridItem>
                         </Grid>
                     </Form>

@@ -19,9 +19,6 @@
 
 #include "back-ldbm.h"
 
-static int entryrdn_switch = 0;
-static int entryrdn_noancestorid = 0;
-
 #if LDAP_DEBUG_ENTRYRDN
 /* Lets use SLAPI_LOG_BACKLDBM which is less verbose than DEBUG or TRACE */
 #undef SLAPI_LOG_DEBUG
@@ -147,64 +144,6 @@ static int entryrdn_delete_key(entryrdn_db_ctx_t *ctx, Slapi_RDN *srdn, ID id);
 static int _entryrdn_resolve_redirect(entryrdn_db_ctx_t *ctx, rdn_elem **elem, int canfree);
 
 static int entryrdn_warning_on_encryption = 1;
-
-/*
- * This function sets the integer value val to entryrdn_switch.
- * If val is non-zero, the entryrdn index is used and moving subtree
- * and/or renaming an RDN which has children is enabled.
- * If val is zero, the entrydn index is used.
- */
-void
-entryrdn_set_switch(int val)
-{
-    entryrdn_switch = val;
-
-    if (entryrdn_switch) { /* entryrdn on */
-        /* Don't store entrydn in the db */
-        set_attr_to_protected_list(SLAPI_ATTR_ENTRYDN, 0);
-    } else { /* entryrdn off */
-        /* Store entrydn in the db */
-        set_attr_to_protected_list(SLAPI_ATTR_ENTRYDN, 1);
-    }
-
-    return;
-}
-
-/*
- * This function gets the value of entry_switch.
- * All the entryrdn related codes are supposed to be in the
- * if (entryrdn_get_switch()) clauses.
- */
-int
-entryrdn_get_switch()
-{
-    return entryrdn_switch;
-}
-
-/*
- * Note: nsslapd-noancestorid never be "on" unless nsslapd-subtree-rename-switch
- * is on.
- */
-void
-entryrdn_set_noancestorid(int val)
-{
-    if (entryrdn_switch) {
-        entryrdn_noancestorid = val;
-    } else {
-        entryrdn_noancestorid = 0;
-    }
-    return;
-}
-
-int
-entryrdn_get_noancestorid()
-{
-    if (entryrdn_switch) {
-        return entryrdn_noancestorid;
-    } else {
-        return 0;
-    }
-}
 
 /* Initialize the database resources needed for handling entryrdn index:
  *   database instances / cursor / ...
@@ -992,6 +931,7 @@ entryrdn_lookup_dn(backend *be,
     ID workid = id; /* starting from the given id */
     rdn_elem *elem = NULL;
     int maybesuffix = 0;
+    ID suffix_id = 1;
 
     slapi_log_err(SLAPI_LOG_TRACE, "entryrdn_lookup_dn",
                   "--> entryrdn_lookup_dn\n");
@@ -1031,6 +971,26 @@ entryrdn_lookup_dn(backend *be,
     /* Setting the bulk fetch buffer */
     dblayer_value_free(be, &data);
     dblayer_value_init(be, &data);
+
+    /* Just in case the suffix ID is not '1' retrieve it from the database
+     * if the suffix is not defined suffix_id remains '1'
+     */
+    if (be->be_suffix) {
+        keybuf = slapi_ch_strdup(slapi_sdn_get_ndn(be->be_suffix));
+        dblayer_value_set(be, &key, keybuf, strlen(keybuf) + 1);
+        rc = dblayer_cursor_op(&ctx.cursor, DBI_OP_MOVE_TO_KEY, &key, &data);
+        if (rc) {
+            slapi_log_err(SLAPI_LOG_WARNING, "entryrdn_lookup_dn",
+                          "Fails to retrieve the ID of suffix %s - keep the default value '%d'\n",
+                          slapi_sdn_get_ndn(be->be_suffix),
+                          suffix_id);
+        } else {
+            elem = (rdn_elem *)data.data;
+            suffix_id = id_stored_to_internal(elem->rdn_elem_id);
+        }
+        dblayer_value_free(be, &data);
+        dblayer_value_free(be, &key);
+    }
 
     do {
         /* Setting up a key for the node to get its parent */
@@ -1077,7 +1037,16 @@ entryrdn_lookup_dn(backend *be,
                     _ENTRYRDN_DEBUG_GOTO_BAIL();
                     goto bail;
                 }
-                maybesuffix = 1;
+                if (workid == suffix_id) {
+                    /* The loop (workid) iterates from the starting 'id'
+                     * up to the suffix ID (i.e. '1').
+                     * A corner case (#6417) is if an entry, on the path
+                     * 'id' -> suffix, has the same RDN than the suffix.
+                     * In order to erroneously believe the loop hits the suffix
+                     * we need to check that 'workid' is '1' (suffix)
+                     */
+                    maybesuffix = 1;
+                }
             } else {
                 _entryrdn_cursor_print_error("entryrdn_lookup_dn",
                                              key.data, data.size, data.ulen, rc);
@@ -1508,6 +1477,7 @@ _entryrdn_get_elem(entryrdn_db_ctx_t *ctx,
     dbi_entryrdn_records_t rec = {0};
     int rc = 0;
     int dbop = 0;
+    void *prev_elem_data = NULL;
 
     if (NULL == ctx || NULL == key || NULL == data || NULL == elem ||
         NULL == comp_key) {
@@ -1522,7 +1492,7 @@ _entryrdn_get_elem(entryrdn_db_ctx_t *ctx,
         slapi_log_err(ENTRYRDN_LOGLEVEL(rc), "_entryrdn_get_elem",
                       "Backend %s suffix %s is too long.\n",
                       ctx->be->be_name, (char*)(key->data));
-        rc = DBI_RC_OTHER;;
+        rc = DBI_RC_OTHER;
         _ENTRYRDN_DEBUG_GOTO_BAIL();
         goto bail;
     }
@@ -1535,8 +1505,14 @@ _entryrdn_get_elem(entryrdn_db_ctx_t *ctx,
     /* Position cursor at the matching key */
     *elem = NULL;
     dbop = DBI_OP_MOVE_NEAR_DATA;
+
 retry_get:
+    if (*elem) {
+        /* This is a retry, so free the previous elem's data */
+        slapi_ch_free((void**)&prev_elem_data);
+    }
     rc = dblayer_cursor_op(&ctx->cursor, dbop, key, data);
+    prev_elem_data = data->data;  /* save pointer to data so we can free it on a retry */
     *elem = (rdn_elem *)data->data;
     dblayer_value_init(ctx->be, data);
 
@@ -1565,6 +1541,7 @@ retry_get:
     }
     if (*elem && RDN_IS_REDIRECT(*elem)) {
         rc = _entryrdn_resolve_redirect(ctx, elem, 1);
+        prev_elem_data = *elem;
         if (rc) {
             _ENTRYRDN_DEBUG_GOTO_BAIL();
             goto bail;
@@ -1581,7 +1558,7 @@ retry_get:
     }
     if (*elem && 0 != strcmp(comp_key, (char *)(*elem)->rdn_elem_nrdn_rdn)) {
         /* the exact element was not found */
-        if (rc ==0 && rec.redirect) {
+        if (rc == 0 && rec.redirect) {
             /* If the data is redirected, it is not in entryrdn db
              * so DBI_OP_MOVE_NEAR_DATA selected a wrong record
              * lets try the other records with the same key
@@ -1593,12 +1570,20 @@ retry_get:
         _ENTRYRDN_DEBUG_GOTO_BAIL();
         goto bail;
     }
+
 bail:
+    if (rec.redirect) {
+        dblayer_value_free(ctx->be, &rec.redirect_data);
+        dblayer_value_free(ctx->be, &rec.redirect_key);
+    }
     if (*elem) {
         slapi_log_err(SLAPI_LOG_TRACE, "_entryrdn_get_elem", "<-- _entryrdn_get_elem (*elem rdn=%s) rc=%d\n",
                       RDN_ADDR(*elem), rc);
     } else {
         slapi_log_err(SLAPI_LOG_TRACE, "_entryrdn_get_elem", "<-- _entryrdn_get_elem (*elem NULL) rc=%d\n", rc);
+    }
+    if (rc) {
+        slapi_ch_free((void**)elem);
     }
     return rc;
 }
@@ -1723,6 +1708,9 @@ retry_get0:
     } while (0 == rc);
 
 bail:
+    if (childelem && RDN_IS_REDIRECT(childelem)) {
+        slapi_ch_free((void **)&childelem);
+    }
     slapi_log_err(SLAPI_LOG_TRACE, "_entryrdn_get_tombstone_elem",
                   "<-- _entryrdn_get_tombstone_elem\n");
     return rc;
@@ -2082,7 +2070,7 @@ _entryrdn_replace_suffix_id(entryrdn_db_ctx_t *ctx, dbi_val_t *key, dbi_val_t *a
                      * DBI_RC_NOTFOUND means that redirect db is corrupted
                      */
                     _ENTRYRDN_DEBUG_GOTO_BAIL();
-                    goto bail;
+                    goto bail0;
                 }
             }
             dblayer_value_set_buffer(ctx->be, &moddata, childelem, _entryrdn_rdn_elem_size(childelem));
@@ -3092,7 +3080,7 @@ _entryrdn_index_read(entryrdn_db_ctx_t *ctx,
             if (childelems) {
                 break; /* get the child elems */
             } else {
-/* We got the targetelem.
+                /* We got the targetelem.
                  * And we don't have to gather childelems, so we can return. */
 #ifdef LDAP_DEBUG_ENTRYRDN
                 char *dn = NULL;
@@ -3332,17 +3320,17 @@ _entryrdn_append_childidl(entryrdn_db_ctx_t *ctx,
     /* E.g., C5 */
     char *keybuf = slapi_ch_smprintf("%c%u", RDN_INDEX_CHILD, id);
     dbi_val_t key = {0};
-    dbi_bulk_t data = {0};
-    char buffer[RDN_BULK_FETCH_BUFFER_SIZE];
+    dbi_val_t dataret = {0};
+    IDList *direct_children = NULL;
+    idl_iterator child_iter;
     int rc = 0;
 
     dblayer_value_set(ctx->be, &key, keybuf, strlen(keybuf) + 1);
-    /* Setting the bulk fetch buffer */
-    dblayer_bulk_set_buffer(ctx->be, &data, buffer, sizeof(buffer), DBI_VF_BULK_DATA);
+    dblayer_value_init(ctx->be, &dataret);
 
 /* Position cursor at the matching key */
 retry_get0:
-    rc = dblayer_cursor_bulkop(&ctx->cursor, DBI_OP_MOVE_TO_KEY, &key, &data);
+    rc = dblayer_cursor_op(&ctx->cursor, DBI_OP_MOVE_TO_KEY, &key, &dataret);
     if (rc) {
         if (DBI_RC_RETRY == rc) {
             slapi_log_err(ENTRYRDN_LOGLEVEL(rc), "_entryrdn_append_childidl",
@@ -3358,7 +3346,7 @@ retry_get0:
             rc = 0; /* okay not to have children */
         } else {
             _entryrdn_cursor_print_error("_entryrdn_append_childidl",
-                                         key.data, data.v.size, data.v.ulen, rc);
+                                         key.data, dataret.size, dataret.ulen, rc);
         }
         _ENTRYRDN_DEBUG_GOTO_BAIL();
         goto bail;
@@ -3367,68 +3355,82 @@ retry_get0:
     /* Iterate over the duplicates to get the direct child's ID */
     do {
         rdn_elem *myelem = NULL;
-        dbi_val_t dataret = {0};
-        for (dblayer_bulk_start(&data); DBI_RC_SUCCESS == dblayer_bulk_nextdata(&data, &dataret); ) {
-            ID myid = 0;
-            myelem = (rdn_elem *)dataret.data;
-            if (RDN_IS_REDIRECT(myelem)) {
-                rc = _entryrdn_resolve_redirect(ctx, &myelem, 0);
-                if (rc) {
-                    /* Should not have any retry on lmdb and
-                     * DBI_RC_NOTFOUND means that redirect db is corrupted
-                     */
-                    _ENTRYRDN_DEBUG_GOTO_BAIL();
-                    goto bail;
-                }
-            }
-            myid = id_stored_to_internal(myelem->rdn_elem_id);
-            rc = idl_append_extend(affectedidl, myid);
+        ID myid = 0;
+
+        myelem = (rdn_elem *)dataret.data;
+        if (RDN_IS_REDIRECT(myelem)) {
+            rc = _entryrdn_resolve_redirect(ctx, &myelem, 0);
             if (rc) {
-                slapi_log_err(SLAPI_LOG_ERR, "_entryrdn_append_childidl",
-                              "Appending %d to affected idl failed (%d)\n", myid, rc);
-                if (myelem != dataret.data) {
-                    /* myelem was alloc by _entryrdn_resolve_redirect */
-                    slapi_ch_free((void**)&myelem);
-                }
-                _ENTRYRDN_DEBUG_GOTO_BAIL();
-                goto bail;
-            }
-            rc = _entryrdn_append_childidl(ctx, (const char *)myelem->rdn_elem_nrdn_rdn,
-                                           myid, affectedidl);
-            if (myelem != dataret.data) {
-                /* myelem was alloc by _entryrdn_resolve_redirect */
-                slapi_ch_free((void**)&myelem);
-            }
-            if (rc) {
+                /* Should not have any retry on lmdb and
+                 * DBI_RC_NOTFOUND means that redirect db is corrupted
+                 */
                 _ENTRYRDN_DEBUG_GOTO_BAIL();
                 goto bail;
             }
         }
-    retry_get1:
-        rc = dblayer_cursor_bulkop(&ctx->cursor, DBI_OP_NEXT_DATA, &key, &data);
+        myid = id_stored_to_internal(myelem->rdn_elem_id);
+        if (myelem != dataret.data) {
+            /* myelem was alloc by _entryrdn_resolve_redirect */
+            slapi_ch_free((void **)&myelem);
+        }
+        rc = idl_append_extend(affectedidl, myid);
         if (rc) {
-            if (DBI_RC_RETRY == rc) {
-                slapi_log_err(ENTRYRDN_LOGLEVEL(rc), "_entryrdn_append_childidl",
-                              "Retry cursor get deadlock\n");
-                if (ctx->db_txn) {
-                    _ENTRYRDN_DEBUG_GOTO_BAIL();
-                    goto bail;
-                } else {
-                    /* try again */
-                    goto retry_get1;
-                }
-            } else if (DBI_RC_NOTFOUND == rc) {
-                rc = 0; /* okay not to have children */
-            } else {
-                _entryrdn_cursor_print_error("_entryrdn_append_childidl",
-                                             key.data, data.v.size, data.v.ulen, rc);
-            }
+            slapi_log_err(SLAPI_LOG_ERR, "_entryrdn_append_childidl",
+                          "Appending %d to affected idl failed (%d)\n", myid, rc);
             _ENTRYRDN_DEBUG_GOTO_BAIL();
             goto bail;
         }
-    } while (0 == rc);
+        rc = idl_append_extend(&direct_children, myid);
+        if (rc) {
+            slapi_log_err(SLAPI_LOG_ERR, "_entryrdn_append_childidl",
+                          "Appending %d to direct children idl failed (%d)\n", myid, rc);
+            _ENTRYRDN_DEBUG_GOTO_BAIL();
+            goto bail;
+        }
+    retry_get1:
+        rc = dblayer_cursor_op(&ctx->cursor, DBI_OP_NEXT_DATA, &key, &dataret);
+        if (DBI_RC_RETRY == rc) {
+            slapi_log_err(ENTRYRDN_LOGLEVEL(rc), "_entryrdn_append_childidl",
+                          "Retry cursor get deadlock\n");
+            if (ctx->db_txn) {
+                _ENTRYRDN_DEBUG_GOTO_BAIL();
+                goto bail;
+            } else {
+                /* try again */
+                goto retry_get1;
+            }
+        } else if (DBI_RC_NOTFOUND == rc) {
+            rc = 0;
+            break;
+        } else if (rc) {
+            _entryrdn_cursor_print_error("_entryrdn_append_childidl",
+                                         key.data, dataret.size, dataret.ulen, rc);
+            _ENTRYRDN_DEBUG_GOTO_BAIL();
+            goto bail;
+        }
+    } while (1);
+
+    /* Recurse only after all direct children are collected.*/
+    if (direct_children) {
+        child_iter = idl_iterator_init(direct_children);
+        for (;;) {
+            ID childid = idl_iterator_dereference_increment(&child_iter, direct_children);
+            if (childid == NOID) {
+                break;
+            }
+            rc = _entryrdn_append_childidl(ctx, nrdn, childid, affectedidl);
+            if (rc) {
+                _ENTRYRDN_DEBUG_GOTO_BAIL();
+                goto bail;
+            }
+        }
+    }
 
 bail:
+    if (direct_children) {
+        idl_free(&direct_children);
+    }
+    dblayer_value_free(ctx->be, &dataret);
     dblayer_value_free(ctx->be, &key);
     return rc;
 }

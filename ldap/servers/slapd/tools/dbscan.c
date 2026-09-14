@@ -20,12 +20,14 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <time.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include <getopt.h>
 #include "../back-ldbm/dbimpl.h"
 #include "../slapi-plugin.h"
 #include "nspr.h"
@@ -85,6 +87,8 @@
 #define DB_BUFFER_SMALL ENOMEM
 #endif
 
+#define COUNTOF(array)    ((sizeof(array))/sizeof(*(array)))
+
 #if defined(linux)
 #include <getopt.h>
 #endif
@@ -130,8 +134,42 @@ long ind_cnt = 0;
 long allids_cnt = 0;
 long other_cnt = 0;
 char *dump_filename = NULL;
+int do_it = 0;
 
 static Slapi_Backend *be = NULL; /* Pseudo backend used to interact with db */
+
+/* For Long options without shortcuts */
+enum {
+    OPT_FIRST = 0x1000,
+    OPT_DO_IT,
+    OPT_REMOVE,
+};
+
+static const struct option options[] = {
+    /* Options without shortcut */
+    { "do-it", no_argument, 0, OPT_DO_IT },
+    { "remove", no_argument, 0, OPT_REMOVE },
+    /* Options with shortcut */
+    { "import", required_argument, 0, 'I' },
+    { "export", required_argument, 0, 'X' },
+    { "db-type", required_argument, 0, 'D' },
+    { "dbi", required_argument, 0, 'f' },
+    { "ascii", no_argument, 0, 'A' },
+    { "raw", no_argument, 0, 'R' },
+    { "truncate-entry", required_argument, 0, 't' },
+    { "entry-id", required_argument, 0, 'K' },
+    { "key", required_argument, 0, 'k' },
+    { "list", required_argument, 0, 'L' },
+    { "stats", required_argument, 0, 'S' },
+    { "id-list-max-size", required_argument, 0, 'l' },
+    { "id-list-min-size", required_argument, 0, 'G' },
+    { "show-id-list-lenghts", no_argument, 0, 'n' },
+    { "show-id-list", no_argument, 0, 'r' },
+    { "summary", no_argument, 0, 's' },
+    { "help", no_argument, 0, 'h' },
+    { 0, 0, 0, 0 }
+};
+
 
 /** db_printf - functioning same as printf but a place for manipluating output.
 */
@@ -377,10 +415,10 @@ print_attr(const char *attrname, char **buff)
    {<4 byte size><value1><4 byte size><value2>... ||
         <null terminated str1> <null terminated str2>...}
  */
-void _cl5ReadMod(char **buff);
+void _cl5ReadMod(char **buff, bool print_op);
 
 void
-_cl5ReadMods(char **buff)
+_cl5ReadMods(char **buff, bool print_op)
 {
     char *pos = *buff;
     ID i;
@@ -394,7 +432,10 @@ _cl5ReadMods(char **buff)
 
 
     for (i = 0; i < mod_count; i++) {
-        _cl5ReadMod(&pos);
+        if (print_op && i>0) {
+            db_printf("\t\t-\n");
+        }
+        _cl5ReadMod(&pos, print_op);
     }
 
     *buff = pos;
@@ -463,14 +504,15 @@ id_internal_to_stored(ID i, char *b)
 }
 
 void
-_cl5ReadMod(char **buff)
+_cl5ReadMod(char **buff, bool print_op)
 {
+    static const char *ops[] = { "add", "delete", "replace" };
     char *pos = *buff;
     uint32_t i;
     uint32_t val_count;
     char *type = NULL;
+    PRUint8 op = *pos++;
 
-    pos++;
     _cl5ReadString(&type, &pos);
 
     /* need to do the copy first, to skirt around alignment problems on
@@ -479,6 +521,10 @@ _cl5ReadMod(char **buff)
     val_count = ntohl(val_count);
     pos += sizeof(uint32_t);
 
+    op &= LDAP_MOD_OP;
+    if (print_op && op < PR_ARRAY_SIZE(ops)) {
+        db_printf("\t\t%s: %s\n", ops[op], type);
+    }
     for (i = 0; i < val_count; i++) {
         print_ber_attr(type, &pos);
     }
@@ -572,13 +618,13 @@ print_changelog(unsigned char *data, int len __attribute__((unused)))
         print_attr("dn", &pos);
         /* convert mods to entry */
         db_printf("\toperation: add\n");
-        _cl5ReadMods(&pos);
+        _cl5ReadMods(&pos, false);
         break;
 
     case SLAPI_OPERATION_MODIFY:
         print_attr("dn", &pos);
         db_printf("\toperation: modify\n");
-        _cl5ReadMods(&pos);
+        _cl5ReadMods(&pos, true);
         break;
 
     case SLAPI_OPERATION_MODRDN: {
@@ -587,7 +633,7 @@ print_changelog(unsigned char *data, int len __attribute__((unused)))
         print_attr("newrdn", &pos);
         db_printf("\tdeleteoldrdn: %d\n", (int)(*pos++));
         print_attr("newsuperior", &pos);
-        _cl5ReadMods(&pos);
+        _cl5ReadMods(&pos, false);
         break;
     }
     case SLAPI_OPERATION_DELETE:
@@ -899,7 +945,7 @@ is_changelog(char *filename)
 }
 
 static void
-usage(char *argv0)
+usage(char *argv0, int error)
 {
     char *copy = strdup(argv0);
     char *p0 = NULL, *p1 = NULL;
@@ -922,42 +968,52 @@ usage(char *argv0)
     }
     printf("\n%s - scan a db file and dump the contents\n", p0);
     printf("  common options:\n");
-    printf("    -D <dbimpl>     specify db implementaion (may be: bdb or mdb)\n");
-    printf("    -f <filename>   specify db file\n");
-    printf("    -A              dump as ascii data\n");
-    printf("    -R              dump as raw data\n");
-    printf("    -t <size>       entry truncate size (bytes)\n");
+    printf("    -A, --ascii                    dump as ascii data\n");
+    printf("    -D, --db-type <dbimpl>         specify db implementaion (may be: bdb or mdb)\n");
+    printf("    -f, --dbi <filename>           specify db instance\n");
+    printf("    -R, --raw                      dump as raw data\n");
+    printf("    -t, --truncate-entry <size>    entry truncate size (bytes)\n");
+
     printf("  entry file options:\n");
-    printf("    -K <entry_id>   lookup only a specific entry id\n");
+    printf("    -K, --entry-id <entry_id>      lookup only a specific entry id\n");
+
     printf("  index file options:\n");
-    printf("    -k <key>        lookup only a specific key\n");
-    printf("    -L <dbhome>     list all db files\n");
-    printf("    -S <dbhome>     show statistics\n");
-    printf("    -l <size>       max length of dumped id list\n");
-    printf("                    (default %" PRIu32 "; 40 bytes <= size <= 1048576 bytes)\n", MAX_BUFFER);
-    printf("    -G <n>          only display index entries with more than <n> ids\n");
-    printf("    -n              display ID list lengths\n");
-    printf("    -r              display the conents of ID list\n");
-    printf("    -s              Summary of index counts\n");
-    printf("    -I file         Import database content from file\n");
-    printf("    -X file         Export database content in file\n");
+    printf("    -G, --id-list-min-size <n>     only display index entries with more than <n> ids\n");
+    printf("    -I, --import file              Import database instance from file.\n");
+    printf("    -k, --key <key>                lookup only a specific key\n");
+    printf("    -l, --id-list-max-size <size>  max length of dumped id list\n");
+    printf("                                  (default %" PRIu32 "; 40 bytes <= size <= 1048576 bytes)\n", MAX_BUFFER);
+    printf("    -n, --show-id-list-lenghts     display ID list lengths\n");
+    printf("    --remove                       remove database instance\n");
+    printf("    -r, --show-id-list             display the conents of ID list\n");
+    printf("    -S, --stats <dbhome>           show statistics\n");
+    printf("    -X, --export file              export database instance in file\n");
+
+    printf("  other options:\n");
+    printf("    -s, --summary                  summary of index counts\n");
+    printf("    -L, --list <dbhome>            list all db files\n");
+    printf("    --do-it                        confirmation flags for destructive actions like --remove or --import\n");
+    printf("    -h, --help                     display this usage\n");
+
     printf("  sample usages:\n");
-    printf("    # list the db files\n");
-    printf("    %s -D mdb -L /var/lib/dirsrv/slapd-i/db/\n", p0);
-    printf("    %s -f id2entry.db\n", p0);
+    printf("    # list the database instances\n");
+    printf("    %s -L /var/lib/dirsrv/slapd-supplier1/db/\n", p0);
     printf("    # dump the entry file\n");
     printf("    %s -f id2entry.db\n", p0);
     printf("    # display index keys in cn.db4\n");
     printf("    %s -f cn.db4\n", p0);
+    printf("    # display index keys in cn on lmdb\n");
+    printf("    %s -f /var/lib/dirsrv/slapd-supplier1/db/userroot/cn.db\n", p0);
+    printf("    (Note: Use 'dbscan -L db_home_dir' to get the db instance path)\n");
     printf("    # display index keys and the count of entries having the key in mail.db4\n");
     printf("    %s -r -f mail.db4\n", p0);
     printf("    # display index keys and the IDs having more than 20 IDs in sn.db4\n");
     printf("    %s -r -G 20 -f sn.db4\n", p0);
     printf("    # display summary of objectclass.db4\n");
-    printf("    %s -f objectclass.db4\n", p0);
+    printf("    %s -s -f objectclass.db4\n", p0);
     printf("\n");
     free(copy);
-    exit(1);
+    exit(error?1:0);
 }
 
 void dump_ascii_val(const char *str, dbi_val_t *val)
@@ -1115,6 +1171,7 @@ importdb(const char *dbimpl_name, const char *filename, const char *dump_name)
     dbi_db_t *db = NULL;
     int keyword = 0;
     int ret = 0;
+    int count = 0;
 
     if (dump_name == NULL) {
         printf("Error: dump_name can not be NULL\n");
@@ -1126,26 +1183,54 @@ importdb(const char *dbimpl_name, const char *filename, const char *dump_name)
     dblayer_init_pvt_txn();
 
     if (!dump) {
-        printf("Failed to open dump file %s. Error %d: %s\n", dump_name, errno, strerror(errno));
+        printf("Error: Failed to open dump file %s. Error %d: %s\n", dump_name, errno, strerror(errno));
         return 1;
     }
 
     if (dblayer_private_open(dbimpl_name, filename, 1, &be, &env, &db)) {
-        printf("Can't initialize db plugin: %s\n", dbimpl_name);
+        printf("Error: Can't initialize db plugin: %s\n", dbimpl_name);
         fclose(dump);
         return 1;
     }
 
+    ret = dblayer_txn_begin(be, NULL, &txn);
+    if (ret != 0) {
+        printf("Error: failed to start the database txn. Error %d: %s\n", ret, dblayer_strerror(ret));
+    }
     while (ret == 0 &&
            !_read_line(dump, &keyword, &key) && keyword == 'k' &&
            !_read_line(dump, &keyword, &data) && keyword == 'v') {
         ret = dblayer_db_op(be, db, txn.txn, DBI_OP_PUT, &key, &data);
+        if (ret == 0  && count++ >= 1000) {
+            ret = dblayer_txn_commit(be, &txn);
+            if (ret != 0) {
+                printf("Error: failed to commit the database txn. Error %d: %s\n", ret, dblayer_strerror(ret));
+            } else {
+                count = 0;
+                ret = dblayer_txn_begin(be, NULL, &txn);
+                if (ret != 0) {
+                    printf("Error: failed to start the database txn. Error %d: %s\n", ret, dblayer_strerror(ret));
+                }
+            }
+        }
+    }
+    if (ret == 0) {
+        ret = dblayer_txn_commit(be, &txn);
+        if (ret != 0) {
+            printf("Error: failed to commit the database txn. Error %d: %s\n", ret, dblayer_strerror(ret));
+        }
+    }
+    if (ret != 0) {
+        (void) dblayer_txn_abort(be, &txn);
+        printf("Error: failed to write record in database. Error %d: %s\n", ret, dblayer_strerror(ret));
+        dump_ascii_val("Failing record key", &key);
+        dump_ascii_val("Failing record value", &data);
     }
     fclose(dump);
     dblayer_value_free(be, &key);
     dblayer_value_free(be, &data);
     if (dblayer_private_close(&be, &env, &db)) {
-        printf("Unable to shutdown the db plugin: %s\n", dblayer_strerror(1));
+        printf("Error: Unable to shutdown the db plugin: %s\n", dblayer_strerror(1));
         return 1;
     }
     return ret;
@@ -1242,13 +1327,13 @@ removedb(const char *dbimpl_name, const char *filename)
         return 1;
     }
 
+    db = NULL; /* Database is already closed by dblayer_db_remove */
     if (dblayer_private_close(&be, &env, &db)) {
         printf("Unable to shutdown the db plugin: %s\n", dblayer_strerror(1));
         return 1;
     }
     return 0;
 }
-
 
 int
 main(int argc, char **argv)
@@ -1263,7 +1348,10 @@ main(int argc, char **argv)
     uint32_t entry_id = 0xffffffff;
     char *defdbimpl = getenv("NSSLAPD_DB_LIB");
     char *dbimpl_name = (char*) "mdb";
-    int c;
+    int longopt_idx = 0;
+    int c = 0;
+    char optstring[2*COUNTOF(options)+1] = {0};
+    char *orig_key = NULL;
 
     if (defdbimpl) {
         if (strcasecmp(defdbimpl, "bdb") == 0) {
@@ -1274,8 +1362,31 @@ main(int argc, char **argv)
         }
     }
 
-    while ((c = getopt(argc, argv, "Af:RL:S:l:nG:srk:K:hvt:D:X:I:d")) != EOF) {
+    /* Compute getopt short option string */
+    {
+        char *pt = optstring;
+        for (const struct option *opt = options; opt->name; opt++) {
+            if (opt->val>0 && opt->val<OPT_FIRST) {
+                *pt++ = (char)(opt->val);
+                if (opt->has_arg == required_argument) {
+                    *pt++ = ':';
+                }
+            }
+        }
+        *pt = '\0';
+    }
+
+    while ((c = getopt_long(argc, argv, optstring, options, &longopt_idx)) != EOF) {
+        if (c == 0) {
+            c = longopt_idx;
+        }
         switch (c) {
+        case OPT_DO_IT:
+            do_it = 1;
+            break;
+        case OPT_REMOVE:
+            display_mode |= REMOVE;
+            break;
         case 'A':
             display_mode |= ASCIIDATA;
             break;
@@ -1341,13 +1452,15 @@ main(int argc, char **argv)
             display_mode |= IMPORT;
             dump_filename = optarg;
             break;
-        case 'd':
-            display_mode |= REMOVE;
-            break;
         case 'h':
         default:
-            usage(argv[0]);
+            usage(argv[0], 1);
         }
+    }
+
+    if (filename == NULL) {
+        fprintf(stderr, "PARAMETER ERROR! 'filename' parameter is missing.\n");
+        usage(argv[0], 1);
     }
 
     if (display_mode & EXPORT) {
@@ -1355,16 +1468,30 @@ main(int argc, char **argv)
     }
 
     if (display_mode & IMPORT) {
+        if (!strstr(filename, "/id2entry") && !strstr(filename, "/replication_changelog")) {
+            /* schema is unknown in dbscan ==> duplicate keys sort order is unknown
+             *  ==> cannot create dbi with duplicate keys
+             * ==> only id2entry and repl changelog is importable.
+             */
+            fprintf(stderr, "ERROR: The only database instances that may be imported with dbscan are id2entry and replication_changelog.\n");
+            exit(1);
+        }
+
+        if (do_it == 0) {
+            fprintf(stderr, "PARAMETER ERROR! Trying to perform a destructive action (import)\n"
+                            " without specifying '--do-it' parameter.\n");
+            exit(1);
+        }
         return importdb(dbimpl_name, filename, dump_filename);
     }
 
     if (display_mode & REMOVE) {
+        if (do_it == 0) {
+            fprintf(stderr, "PARAMETER ERROR! Trying to perform a destructive action (remove)\n"
+                            " without specifying '--do-it' parameter.\n");
+            exit(1);
+        }
         return removedb(dbimpl_name, filename);
-    }
-
-    if (filename == NULL) {
-        fprintf(stderr, "PARAMETER ERROR! 'filename' parameter is missing.\n");
-        usage(argv[0]);
     }
 
     if (display_mode & LISTDBS) {
@@ -1433,6 +1560,7 @@ main(int argc, char **argv)
     }
 
     if (find_key) {
+        orig_key = slapi_ch_strdup(find_key);
         /* Position cursor at the matching key */
         dblayer_value_set_buffer(be, &key, find_key, strlen(find_key) + 1);
         dblayer_value_free(be, &data);
@@ -1458,9 +1586,17 @@ main(int argc, char **argv)
                 goto done;
             }
             do {
-                display_item(&cursor, &key, &data);
-                ret = dblayer_cursor_op(&cursor, DBI_OP_NEXT,  &key, &data);
+                if (key.size <= (strlen(orig_key) + 1) && memcmp((char *)key.data, orig_key, key.size) == 0) {
+                    display_item(&cursor, &key, &data);
+                } else {
+                    break;
+                }
+                ret = dblayer_cursor_op(&cursor, DBI_OP_NEXT_DATA,  &key, &data);
             } while (0 == ret);
+            if (ret == DBI_RC_NOTFOUND) {
+                /* processed all the keys, this is not an error */
+                ret = 0;
+            }
             dblayer_value_free(be, &key);
             dblayer_value_init(be, &key);
         }
@@ -1534,6 +1670,7 @@ main(int argc, char **argv)
     }
 
 done:
+    slapi_ch_free_string(&orig_key);
     dblayer_value_free(be, &key);
     dblayer_value_free(be, &data);
     dblayer_cursor_op(&cursor, DBI_OP_CLOSE, NULL, NULL);

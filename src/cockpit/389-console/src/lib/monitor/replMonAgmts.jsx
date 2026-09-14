@@ -1,18 +1,18 @@
 import React from "react";
 import cockpit from "cockpit";
-import { log_cmd } from "../tools.jsx";
+import { log_cmd, getApiErrorMessage } from "../tools.jsx";
 import PropTypes from "prop-types";
 import {
     AgmtTable,
 } from "./monitorTables.jsx";
 
 import {
+    Button,
     Text,
     TextContent,
     TextVariants,
 } from "@patternfly/react-core";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faSyncAlt } from '@fortawesome/free-solid-svg-icons';
+import { SyncAltIcon } from "@patternfly/react-icons";
 
 const _ = cockpit.gettext;
 
@@ -35,7 +35,7 @@ export class ReplAgmtMonitor extends React.Component {
             "repl-agmt", "poke", "--suffix=" + this.props.suffix, agmt_name];
         log_cmd("pokeAgmt", "Awaken the agreement", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -43,10 +43,10 @@ export class ReplAgmtMonitor extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to poke replication agreement $0 - $1"), agmt_name, errMsg.desc)
+                        cockpit.format(_("Failed to poke replication agreement $0 - $1"), agmt_name, errMsg)
                     );
                 });
     }
@@ -60,13 +60,13 @@ export class ReplAgmtMonitor extends React.Component {
                     <TextContent>
                         <Text component={TextVariants.h3}>
                             {_("Monitor Replication Agreements")}
-                            <FontAwesomeIcon
-                                size="lg"
-                                className="ds-left-margin ds-refresh"
-                                icon={faSyncAlt}
-                                title={_("Refresh replication monitor")}
+                            <Button 
+                                variant="plain"
+                                aria-label={_("Refresh replication monitor")}
                                 onClick={this.props.handleReload}
-                            />
+                            >
+                                <SyncAltIcon />
+                            </Button>
                         </Text>
                     </TextContent>
                 </div>

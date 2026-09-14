@@ -37,6 +37,9 @@
 #include "slap.h"
 #include "pratom.h"
 #include "csngen.h"
+#ifdef ENABLE_HIBP
+#include "hibp.h"
+#endif
 
 /* Forward declarations */
 static int add_internal_pb(Slapi_PBlock *pb);
@@ -61,12 +64,12 @@ do_add(Slapi_PBlock *pb)
     int rc;
     PRBool searchsubentry = PR_TRUE;
     Connection *pb_conn = NULL;
+    int32_t log_format = config_get_accesslog_log_format();
 
     slapi_log_err(SLAPI_LOG_TRACE, "do_add", "==>\n");
 
     slapi_pblock_get(pb, SLAPI_CONNECTION, &pb_conn);
     slapi_pblock_get(pb, SLAPI_OPERATION, &operation);
-
 
     if (operation == NULL || pb_conn == NULL) {
         slapi_log_err(SLAPI_LOG_ERR, "do_add", "NULL param: pb_conn (0x%p) pb_op (0x%p)\n",
@@ -176,12 +179,23 @@ do_add(Slapi_PBlock *pb)
           to modify so not to break existing clients */
         if (op_shared_is_allowed_attr(normtype, pb_conn->c_isreplication_session)) {
             if ((rc = slapi_entry_add_values(e, normtype, vals)) != LDAP_SUCCESS) {
-                slapi_log_access(LDAP_DEBUG_STATS,
-                                 "conn=%" PRIu64 " op=%d ADD dn=\"%s\", add values for type %s failed\n",
-                                 pb_conn->c_connid, operation->o_opid,
-                                 slapi_entry_get_dn_const(e), normtype);
-                send_ldap_result(pb, rc, NULL, NULL, 0, NULL);
+                if (log_format != LOG_FORMAT_DEFAULT) {
+                    /* JSON logging */
+                    slapd_log_pblock logpb = {0};
+                    char msg[BUFSIZ] = {0};
 
+                    PR_snprintf(msg, sizeof(msg), "add values for type %s failed", normtype);
+                    slapd_log_pblock_init(&logpb, log_format, pb);
+                    logpb.target_dn = slapi_entry_get_dn_const(e);
+                    logpb.msg = msg;
+                    slapd_log_access_add(&logpb);
+                } else {
+                    slapi_log_access(LDAP_DEBUG_STATS,
+                                    "conn=%" PRIu64 " op=%d ADD dn=\"%s\", add values for type %s failed\n",
+                                    pb_conn->c_connid, operation->o_opid,
+                                    slapi_entry_get_dn_const(e), normtype);
+                }
+                send_ldap_result(pb, rc, NULL, NULL, 0, NULL);
                 slapi_ch_free((void **)&normtype);
                 ber_bvecfree(vals);
                 goto free_and_return;
@@ -500,6 +514,8 @@ op_shared_add(Slapi_PBlock *pb)
     Slapi_DN *sdn = NULL;
     passwdPolicy *pwpolicy;
     Connection *pb_conn = NULL;
+    int32_t log_format = config_get_accesslog_log_format();
+    time_t start_time = {0};
 
     slapi_pblock_get(pb, SLAPI_OPERATION, &operation);
     slapi_pblock_get(pb, SLAPI_CONNECTION, &pb_conn);
@@ -523,30 +539,53 @@ op_shared_add(Slapi_PBlock *pb)
     proxy_err = proxyauth_get_dn(pb, &proxydn, &errtext);
 
     if (operation_is_flag_set(operation, OP_FLAG_ACTION_LOG_ACCESS)) {
+        slapd_log_pblock logpb = {0};
+
         if (proxydn) {
             proxystr = slapi_ch_smprintf(" authzid=\"%s\"", proxydn);
         }
 
+        slapd_log_pblock_init(&logpb, log_format, pb);
+        logpb.target_dn = slapi_entry_get_dn_const(e);
+        logpb.request_controls = operation_get_req_controls(operation);
+        logpb.authzid = proxydn;
+
         if (!internal_op) {
-            slapi_log_access(LDAP_DEBUG_STATS, "conn=%" PRIu64 " op=%d ADD dn=\"%s\"%s\n",
-                             pb_conn ? pb_conn->c_connid : -1,
-                             operation->o_opid,
-                             slapi_entry_get_dn_const(e),
-                             proxystr ? proxystr : "");
+            if (log_format != LOG_FORMAT_DEFAULT) {
+                /* JSON logging */
+                slapd_log_access_add(&logpb);
+            } else {
+                slapi_log_access(LDAP_DEBUG_STATS, "conn=%" PRIu64 " op=%d ADD dn=\"%s\"%s\n",
+                                 pb_conn ? pb_conn->c_connid : operation->o_connid,
+                                 operation->o_opid,
+                                 slapi_entry_get_dn_const(e),
+                                 proxystr ? proxystr : "");
+            }
         } else {
             uint64_t connid;
             int32_t op_id;
             int32_t op_internal_id;
             int32_t op_nested_count;
-            get_internal_conn_op(&connid, &op_id, &op_internal_id, &op_nested_count);
-            slapi_log_access(LDAP_DEBUG_ARGS,
-                             connid==0 ? "conn=Internal(%" PRId64 ") op=%d(%d)(%d) ADD dn=\"%s\"\n" :
-                                         "conn=%" PRId64 " (Internal) op=%d(%d)(%d) ADD dn=\"%s\"\n",
-                             connid,
-                             op_id,
-                             op_internal_id,
-                             op_nested_count,
-                             slapi_entry_get_dn_const(e));
+            get_internal_conn_op(&connid, &op_id, &op_internal_id, &op_nested_count, &start_time);
+            if (log_format != LOG_FORMAT_DEFAULT) {
+                /* JSON logging */
+                logpb.conn_time = start_time;
+                logpb.conn_id = connid;
+                logpb.op_id = op_id;
+                logpb.op_internal_id = op_internal_id;
+                logpb.op_nested_count = op_nested_count;
+                logpb.level = LDAP_DEBUG_ARGS;
+                slapd_log_access_add(&logpb);
+            } else {
+                slapi_log_access(LDAP_DEBUG_ARGS,
+                                 connid==0 ? "conn=Internal(%" PRId64 ") op=%d(%d)(%d) ADD dn=\"%s\"\n" :
+                                             "conn=%" PRId64 " (Internal) op=%d(%d)(%d) ADD dn=\"%s\"\n",
+                                 connid,
+                                 op_id,
+                                 op_internal_id,
+                                 op_nested_count,
+                                 slapi_entry_get_dn_const(e));
+            }
         }
     }
 
@@ -630,6 +669,47 @@ op_shared_add(Slapi_PBlock *pb)
                  * Check password syntax, unless this is a pwd admin/rootDN
                  */
                 present_values = attr_get_present_values(attr);
+#ifdef ENABLE_HIBP
+                /* Check all passwords against breach database (admin bypass) */
+                if (!pw_is_pwp_admin(pb, pwpolicy, PWP_ADMIN_OR_ROOTDN) &&
+                    pwpolicy->pw_check_breach) {
+                    /* Cap cleartext password values to prevent worker pool exhaustion */
+                    size_t cleartext_count = 0;
+                    for (size_t i = 0; present_values[i] != NULL; i++) {
+                        const char *pwd = slapi_value_get_string(present_values[i]);
+                        if (pwd && !slapi_is_encoded((char *)pwd)) {
+                            cleartext_count++;
+                        }
+                    }
+                    if (cleartext_count > HIBP_MAX_PASSWORDS_PER_OP) {
+                        slapi_log_err(SLAPI_LOG_ERR, "op_shared_add",
+                            "Too many cleartext password values (%zu) for %s - max %d allowed\n",
+                            cleartext_count, slapi_entry_get_dn_const(e), HIBP_MAX_PASSWORDS_PER_OP);
+                        send_ldap_result(pb, LDAP_UNWILLING_TO_PERFORM, NULL,
+                            "Too many password values in single operation", 0, NULL);
+                        goto done;
+                    }
+
+                    for (size_t i = 0; present_values[i] != NULL; i++) {
+                        const char *pwd = slapi_value_get_string(present_values[i]);
+                        if (pwd && !slapi_is_encoded((char *)pwd)) {
+                            int breach_count = hibp_check_password(pwd, pwpolicy);
+                            if (breach_count > 0) {
+                                slapi_log_err(SLAPI_LOG_WARNING, "op_shared_add",
+                                    "Password for %s found in breach database (%d occurrences)\n",
+                                    slapi_entry_get_dn_const(e), breach_count);
+                                send_ldap_result(pb, LDAP_CONSTRAINT_VIOLATION, NULL,
+                                    "Password found in breach database", 0, NULL);
+                                goto done;
+                            } else if (breach_count < 0) {
+                                slapi_log_err(SLAPI_LOG_WARNING, "op_shared_add",
+                                    "Failed to check password against breach database for %s\n",
+                                    slapi_entry_get_dn_const(e));
+                            }
+                        }
+                    }
+                }
+#endif
                 if (!pw_is_pwp_admin(pb, pwpolicy, PWP_ADMIN_OR_ROOTDN) &&
                     check_pw_syntax(pb, slapi_entry_get_sdn_const(e),
                                     present_values, NULL, e, 0) != 0) {
@@ -730,6 +810,14 @@ op_shared_add(Slapi_PBlock *pb)
         }
         /* expand objectClass values to reflect the inheritance hierarchy */
         slapi_schema_expand_objectclasses(e);
+
+        /* Validate password policy attrs */
+        if (!internal_op) {
+            if ((err = check_pw_policy_attrs(e, NULL, errorbuf, sizeof(errorbuf))) != LDAP_SUCCESS) {
+                send_ldap_result(pb, err, NULL, errorbuf, 0, NULL);
+                goto done;
+            }
+        }
     }
 
     /*
@@ -812,6 +900,7 @@ done:
     if (be)
         slapi_be_Unlock(be);
     slapi_pblock_get(pb, SLAPI_ENTRY_POST_OP, &pse);
+    slapi_pblock_set(pb, SLAPI_ENTRY_POST_OP, NULL);
     slapi_entry_free(pse);
     slapi_ch_free((void **)&operation->o_params.p.p_add.parentuniqueid);
     slapi_entry_free(e);

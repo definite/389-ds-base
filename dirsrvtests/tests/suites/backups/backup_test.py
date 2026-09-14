@@ -7,23 +7,29 @@
 # --- END COPYRIGHT BLOCK ---
 #
 import logging
-import pytest
 import os
 import shutil
 import time
 import glob
+import subprocess
+import pytest
+import ldap
 from datetime import datetime
-from lib389._constants import DEFAULT_SUFFIX, INSTALL_LATEST_CONFIG
+from lib389._constants import DN_DM, PASSWORD, DEFAULT_SUFFIX, INSTALL_LATEST_CONFIG
 from lib389.properties import BACKEND_SAMPLE_ENTRIES, TASK_WAIT
-from lib389.topologies import topology_st as topo, topology_m2 as topo_m2
+from test389.topologies import topology_st as topo, topology_m2 as topo_m2, set_timeout
 from lib389.backend import Backends, Backend
 from lib389.dbgen import dbgen_users
 from lib389.tasks import BackupTask, RestoreTask
 from lib389.config import BDB_LDBMConfig
+from lib389.idm.nscontainer import nsContainers
 from lib389 import DSEldif
 from lib389.utils import ds_is_older, get_default_db_lib
 from lib389.replica import ReplicationManager
+from threading import Thread, Event
 import tempfile
+
+
 
 pytestmark = pytest.mark.tier1
 
@@ -34,13 +40,41 @@ else:
     logging.getLogger(__name__).setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
+# test_online_backup_and_dse_write may hang if 6372 is not fixed
+# so lets use a shorter timeout
+set_timeout(30*60)
 
+event = Event()
 
 BESTRUCT = [
     { "bename" : "be1", "suffix": "dc=be1", "nbusers": 1000 },
     { "bename" : "be2", "suffix": "dc=be2", "nbusers": 1000 },
     { "bename" : "be3", "suffix": "dc=be3", "nbusers": 1000 },
 ]
+
+class DseConfigContextManager:
+    """Change a config parameter is dse.ldif and restore it afterwards."""
+
+    def __init__(self, inst, dn, attr, value):
+        self.inst = inst
+        self.dn = dn
+        self.attr = attr
+        self.value = value
+        self.oldvalue = None
+        self.dseldif = DSEldif(inst)
+
+    def __enter__(self):
+        self.inst.stop()
+        self.oldvalue = self.dseldif.get(self.dn, self.attr, single=True)
+        self.dseldif.replace(self.dn, self.attr, self.value)
+        log.info(f"Switching {self.dn}:{self.attr} to {self.value}")
+        self.inst.start()
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        self.inst.stop()
+        log.info(f"Switching {self.dn}:{self.attr} to {self.oldvalue}")
+        self.dseldif.replace(self.dn, self.attr, self.oldvalue)
+        self.inst.start()
 
 
 @pytest.fixture(scope="function")
@@ -50,8 +84,8 @@ def mytopo(topo, request):
     def fin():
         for be in bes:
             be.delete()
-        for dir in glob.glob(f'{inst.ds_paths.backup_dir}/*'):
-            shutil.rmtree(dir)
+        for bak_dir in glob.glob(f'{inst.ds_paths.backup_dir}/*'):
+            shutil.rmtree(bak_dir)
 
     if not DEBUGGING:
         request.addfinalizer(fin)
@@ -152,14 +186,16 @@ def test_db_home_dir_online_backup(topo):
         2. Failure
         3. Success
     """
-    bdb_ldbmconfig = BDB_LDBMConfig(topo.standalone)
-    dseldif = DSEldif(topo.standalone)
-    topo.standalone.stop()
-    with tempfile.TemporaryDirectory() as backup_dir:
-        dseldif.replace(bdb_ldbmconfig.dn, 'nsslapd-db-home-directory', f'{backup_dir}')
-        topo.standalone.start()
-        topo.standalone.tasks.db2bak(backup_dir=f'{backup_dir}', args={TASK_WAIT: True})
-        assert topo.standalone.ds_error_log.match(f".*Failed renaming {backup_dir}.bak back to {backup_dir}")
+    inst = topo.standalone
+    dn = BDB_LDBMConfig(inst).dn
+    attr = 'nsslapd-db-home-directory'
+    with tempfile.TemporaryDirectory() as dbhome_dir:
+        with DseConfigContextManager(inst, dn, attr, dbhome_dir):
+            backup_dir = str(dbhome_dir)
+            inst.tasks.db2bak(backup_dir=backup_dir, args={TASK_WAIT: True})
+            assert inst.ds_error_log.match(f".*Failed renaming {backup_dir}.bak back to {backup_dir}")
+
+
 
 def test_replication(topo_m2):
     """Test that if the dbhome directory is set causing an online backup to fail,
@@ -221,6 +257,51 @@ def test_replication(topo_m2):
         repl.wait_for_replication(S1, S2)
 
 
+def test_after_db_log_rotation(topo):
+    """Test that off line backup restore works as expected.
+
+    :id: 8a091d92-a1cf-11ef-823a-482ae39447e5
+    :setup: One standalone instance
+    :steps:
+        1. Stop instance
+        2. Perform off line backup on instance
+        3. Start instance
+        4. Perform modify operation until db log file rotates
+        5. Stop instance
+        6. Restore instance from backup
+        7. Start instance
+    :expectedresults:
+        1. Success
+        2. Success
+        3. Success
+        4. Success
+        5. Success
+        6. Success
+        7. Success
+    """
+    inst = topo.standalone
+    with tempfile.TemporaryDirectory(dir=inst.ds_paths.backup_dir) as backup_dir:
+        # repl.wait_for_replication perform some changes and wait until they get replicated
+        inst.stop()
+        assert inst.db2bak(backup_dir)
+        inst.start()
+        cmd = [ 'ldclt', '-h', 'localhost', '-b', DEFAULT_SUFFIX,
+                '-p', str(inst.port), '-t', '60', '-N', '2',
+                '-D', DN_DM, '-w', PASSWORD, '-f', "ou=People",
+                '-e', 'attreplace=description:XXXXXX' ]
+        log.info(f'Running {cmd}')
+        # Perform modify operations until log file rolls
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        log.info(f'STDOUT: {result.stdout}')
+        log.info(f'STDERR: {result.stderr}')
+        if get_default_db_lib() == 'bdb':
+            while os.path.isfile(f'{inst.ds_paths.db_dir}/log.0000000001'):
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
+        inst.stop()
+        assert inst.bak2db(backup_dir)
+        inst.start()
+
+
 def test_backup_task_after_failure(mytopo):
     """Test that new backup task is successful after a failure.
     backend that is no longer present.
@@ -246,7 +327,7 @@ def test_backup_task_after_failure(mytopo):
     inst = mytopo.standalone
     tasks = inst.tasks
     archive_dir1 = f'{inst.ds_paths.backup_dir}/bak1'
-    archive_dir1b = f'{inst.ds_paths.backup_dir}/bak1b'
+    dir1bidx = 1
     archive_dir2 = f'{inst.ds_paths.backup_dir}/bak2'
 
     # Sometime the backup complete too fast, so lets retry if first
@@ -261,6 +342,8 @@ def test_backup_task_after_failure(mytopo):
         done,exitCode,warningCode = (False, None, None)
         while not done:
             if os.path.isdir(archive_dir1):
+                archive_dir1b = f'{inst.ds_paths.backup_dir}/bak1b{dir1bidx}'
+                dir1bidx += 1
                 os.rename(archive_dir1, archive_dir1b)
             done,exitCode,warningCode = tasks.checkTask(tasks.entry)
             time.sleep(0.01)
@@ -274,6 +357,38 @@ def test_backup_task_after_failure(mytopo):
     exitCode = tasks.db2bak(backup_dir=archive_dir2, args={TASK_WAIT: True})
     # Step 6. Check it is successful
     assert exitCode == 0, "Backup failed. Issue #6229 may not be fixed."
+
+
+def load_dse(inst):
+    conts = nsContainers(inst, 'cn=config')
+    while not event.is_set():
+        cont = conts.create(properties={'cn': 'test_online_backup_and_dse_write'})
+        cont.delete()
+
+
+def test_online_backup_and_dse_write(topo):
+    """Test online backup while attempting to add/delete entries in dse.ldif.
+
+    :id: 4a1edd2c-be15-11ef-8bc8-482ae39447e5
+    :setup: One standalone instance
+    :steps:
+        1. Start a thread that loops adding then removing in the dse.ldif
+        2. Perform 10 online backups
+        3. Stop the thread
+    :expectedresults:
+        1. Success
+        2. Success (or timeout if issue #6372 is not fixed.)
+        3. Success
+    """
+    inst = topo.standalone
+    t = Thread(target=load_dse, args=[inst])
+    t.start()
+    for x in range(10):
+        with tempfile.TemporaryDirectory() as backup_dir:
+            assert inst.tasks.db2bak(backup_dir=f'{backup_dir}', args={TASK_WAIT: True}) == 0
+    event.set()
+    t.join()
+    event.clear()
 
 
 if __name__ == '__main__':

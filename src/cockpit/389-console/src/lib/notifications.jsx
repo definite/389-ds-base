@@ -40,9 +40,29 @@ export class DoubleConfirmModal extends React.Component {
 
         if (spinning) {
             btnName = mSpinningMsg;
-            extraPrimaryProps.spinnerAriaValueText = _("Loading");
+            extraPrimaryProps.spinnerAriaValueText = btnName;
         }
 
+        const actions = [];
+        if (btnName) {
+            actions.push(
+                <Button
+                    key="confirm"
+                    variant="primary"
+                    onClick={actionHandler}
+                    isDisabled={saveDisabled || spinning}
+                    isLoading={spinning}
+                    {...extraPrimaryProps}
+                >
+                    {btnName}
+                </Button>
+            );
+        }
+        actions.push(
+            <Button key="close" variant="link" onClick={closeHandler}>
+                {_("Close")}
+            </Button>
+        );
         return (
             <Modal
                 variant={ModalVariant.small}
@@ -51,22 +71,7 @@ export class DoubleConfirmModal extends React.Component {
                 isOpen={showModal}
                 aria-labelledby="ds-modal"
                 onClose={closeHandler}
-                actions={[
-                    <Button
-                        key="confirm"
-                        isLoading={spinning}
-                        spinnerAriaValueText={spinning ? _("Loading") : undefined}
-                        variant="primary"
-                        onClick={actionHandler}
-                        isDisabled={saveDisabled || spinning}
-                        {...extraPrimaryProps}
-                    >
-                        {btnName}
-                    </Button>,
-                    <Button key="cancel" variant="link" onClick={closeHandler}>
-                        {_("Cancel")}
-                    </Button>
-                ]}
+                actions={actions}
             >
                 <Form isHorizontal autoComplete="off">
                     <TextContent>
@@ -79,23 +84,74 @@ export class DoubleConfirmModal extends React.Component {
                             <i>{item}</i>
                         </Text>
                     </TextContent>
-                    <Grid className="ds-margin-top-xlg">
-                        <GridItem sm={12} className="ds-center">
-                            <Checkbox
-                                id="modalChecked"
-                                isChecked={checked}
-                                onChange={(checked, e) => {
-                                    handleChange(e);
-                                }}
-                                label={<><b>{_("Yes")}</b>{_(", I am sure.")}</>}
-                            />
-                        </GridItem>
-                    </Grid>
+                    {btnName && (
+                        <Grid className="ds-margin-top-xlg">
+                            <GridItem sm={12} className="ds-center">
+                                <Checkbox
+                                        id="modalChecked"
+                                        isChecked={checked}
+                                        isDisabled={spinning}
+                                        onChange={(e, checked) => {
+                                            handleChange(e);
+                                        }}
+                                        label={<><b>{_("Yes")}</b>{_(", I am sure.")}</>}
+                                    />
+                            </GridItem>
+                        </Grid>
+                    )}
                 </Form>
             </Modal>
         );
     }
 }
+
+export class WarningModal extends React.Component {
+    render() {
+        const {
+            showModal,
+            closeHandler,
+            mTitle,
+            mMsg,
+        } = this.props;
+
+        return (
+            <Modal
+                variant={ModalVariant.small}
+                title={mTitle}
+                titleIconVariant="warning"
+                isOpen={showModal}
+                aria-labelledby="warning-modal"
+                onClose={closeHandler}
+                actions={[
+                    <Button key="ok" variant="primary" onClick={closeHandler}>
+                        {_("Okay")}
+                    </Button>
+                ]}
+            >
+                <Form isHorizontal autoComplete="off">
+                    <TextContent>
+                        <Text className="ds-margin-top ds-margin-bottom" component={TextVariants.h3}>
+                            {mMsg}
+                        </Text>
+                    </TextContent>
+                </Form>
+            </Modal>
+        );
+    }
+}
+
+WarningModal.propTypes = {
+    showModal: PropTypes.bool,
+    closeHandler: PropTypes.func,
+    mTitle: PropTypes.string,
+    mMsg: PropTypes.string,
+};
+
+WarningModal.defaultProps = {
+    showModal: false,
+    mTitle: "",
+    mMsg: "",
+};
 
 DoubleConfirmModal.propTypes = {
     showModal: PropTypes.bool,

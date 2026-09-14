@@ -1,5 +1,5 @@
 # --- BEGIN COPYRIGHT BLOCK ---
-# Copyright (C) 2023 Red Hat, Inc.
+# Copyright (C) 2026 Red Hat, Inc.
 # All rights reserved.
 #
 # License: GPL (version 3 or any later version).
@@ -24,8 +24,9 @@ of LDAP ADD for example.
 A correct Mapping tree for this backend must contain the suffix name, the database name
 and be a backend type. IE:
 
-cn=o3Dexample,cn=mapping tree,cn=config
-cn: o=example
+cn=dc\\3Dexample\\2Cdc\\3Dcom,cn=mapping tree,cn=config
+cn: dc=example,dc=com
+cn: dc\=example\,dc\=com
 nsslapd-backend: userRoot
 nsslapd-state: backend
 objectClass: top
@@ -86,29 +87,52 @@ DSBLE0006 = {
     'fix': 'Migrate the backend to MDB.'
 }
 
-# Config checks
-DSCLE0001 = {
-    'dsle': 'DSCLE0001',
-    'severity': 'LOW',
-    'description': 'Different log timestamp format.',
-    'items': ['cn=config', ],
-    'detail': """nsslapd-logging-hr-timestamps-enabled changes the log format in directory server from
+DSBLE0007 = {
+    'dsle': 'DSBLE0007',
+    'severity': 'HIGH',
+    'description': 'Missing or incorrect system indexes.',
+    'items': [],
+    'detail': """System indexes are essential for proper directory server operation. Missing or
+incorrectly configured system indexes can lead to poor search performance, replication
+issues, and other operational problems.
 
-[07/Jun/2017:17:15:58 +1000]
+The following system indexes should be present with correct configuration:
+EXPECTED_INDEXES
 
-to
-
-[07/Jun/2017:17:15:58.716117312 +1000]
-
-This actually provides a performance improvement. Additionally, this setting will be
-removed in a future release.
+Current discrepancies:
+DISCREPANCIES
 """,
-    'fix': """Set nsslapd-logging-hr-timestamps-enabled to on.
-You can use 'dsconf' to set this attribute.  Here is an example:
+    'fix': """Add the missing system indexes or fix the incorrect configurations using dsconf:
 
-    # dsconf slapd-YOUR_INSTANCE config replace nsslapd-logging-hr-timestamps-enabled=on"""
+REMEDIATION_COMMANDS
+
+After adding or modifying indexes, you may need to reindex the affected attributes:
+
+REINDEX_COMMANDS
+
+WARNING: Reindexing can be resource-intensive and may impact server performance on a live system.
+Consider scheduling reindexing during maintenance windows or periods of low activity. For production
+systems, you may want to reindex offline or use the --wait option to monitor task completion.
+"""
 }
 
+DSBLE0008 = {
+    'dsle': 'DSBLE0008',
+    'severity': 'HIGH',
+    'description': 'Obsolete entrydn index configuration.',
+    'items': [],
+    'detail': """An entrydn index is configured on backend BACKEND_NAME but this server uses
+entryrdn for DN-based indexing. This can cause inconsistent search results
+and index task failures.
+""",
+    'fix': """Remove the obsolete entrydn index and on disk files, then reindex entryrdn:
+
+    # dsconf YOUR_INSTANCE backend index delete BACKEND_NAME --attr entrydn
+    # rm -f DB_DIR/entrydn.db*
+    # dsconf YOUR_INSTANCE backend index reindex BACKEND_NAME --attr entryrdn"""
+}
+
+# Config checks
 DSCLE0002 = {
     'dsle': 'DSCLE0002',
     'severity': 'HIGH',
@@ -289,6 +313,40 @@ an index defined that has equality "eq" index type.  You will need to reindex th
 database after adding the missing index type. Here is an example using dsconf:
 
     # dsconf slapd-YOUR_INSTANCE backend index add --attr=ATTR --index-type=eq --reindex BACKEND
+"""
+}
+
+DSMOLE0002 = {
+    'dsle': 'DSMOLE0002',
+    'severity': 'LOW',
+    'description': 'Removal of a member can be slow ',
+    'items': ['cn=memberof plugin,cn=plugins,cn=config', ],
+    'detail': """If the substring index is configured for a membership attribute. The removal of a member
+from the large group can be slow.
+
+""",
+    'fix': """If not required, you can remove the substring index type using dsconf:
+
+    # dsconf slapd-YOUR_INSTANCE backend index set --attr=ATTR BACKEND --del-type=sub
+"""
+}
+
+DSMOLE0003 = {
+    'dsle': 'DSMOLE0003',
+    'severity': 'MEDIUM',
+    'description': 'Global backend lock is disabled while memberOf monitors all backends',
+    'items': ['cn=memberof plugin,cn=plugins,cn=config',],
+    'detail': """The memberOf plugin is configured to monitor all backends and the
+global backend lock is disabled, this may lead to potential deadlocks
+during cross backend updates. The server will log a warning, but no
+automatic fix is applied.""",
+    'fix': """To prevent potential deadlocks, enable the global backend lock:
+
+    # dsconf slapd-YOUR_INSTANCE config replace ATTR=on
+
+Alternatively, if monitoring all backends is not required, you can disable it:
+
+    # dsconf slapd-YOUR_INSTANCE plugin memberof set --allbackends off
 """
 }
 
@@ -533,6 +591,17 @@ until the time issues have been resolved:
 
 Also look at https://access.redhat.com/documentation/en-us/red_hat_directory_server/11/html/administration_guide/managing_replication-troubleshooting_replication_related_problems
 and find the paragraph "Too much time skew"."""
+}
+
+DSSKEWLE0004 = {
+    'dsle': 'DSSKEWLE0004',
+    'severity': 'Low',
+    'description': 'Extensive time skew.',
+    'items': ['Replication'],
+    'detail': """The time skew is over 365 days. If the time skew continues to
+increase eventually serious replication problems can occur.""",
+    'fix': """Avoid making changes to the system time, and make sure the clocks
+on all the replicas are correct."""
 }
 
 DSLOGNOTES0001 = {

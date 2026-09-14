@@ -38,7 +38,7 @@ def get(inst, basedn, log, args):
 
 
 def get_dn(inst, basedn, log, args):
-    dn = lambda args: _get_arg( args.dn, msg="Enter dn to retrieve")
+    dn = _get_arg( args.dn, msg="Enter dn to retrieve")
     _generic_get_dn(inst, basedn, log.getChild('_generic_get_dn'), MANY, dn, args)
 
 
@@ -47,9 +47,10 @@ def create(inst, basedn, log, args):
     _generic_create(inst, basedn, log.getChild('_generic_create'), MANY, kwargs, args)
 
 
-def delete(inst, basedn, log, args):
-    dn = _get_arg( args, msg="Enter dn to delete")
-    _warn(dn, msg="Deleting %s %s" % (SINGULAR.__name__, dn))
+def delete(inst, basedn, log, args, warn=True):
+    dn = _get_arg( args.dn, msg="Enter dn to delete")
+    if warn:
+        _warn(dn, msg="Deleting %s %s" % (SINGULAR.__name__, dn))
     _generic_delete(inst, basedn, log.getChild('_generic_delete'), SINGULAR, dn, args)
 
 
@@ -71,6 +72,8 @@ def create_parser(subparsers):
 
     list_parser = subcommands.add_parser('list', help='list', formatter_class=CustomHelpFormatter)
     list_parser.set_defaults(func=list)
+    list_parser.add_argument('--full-dn', action='store_true',
+                             help="Return the full DN of the entry instead of the RDN value")
 
     get_parser = subcommands.add_parser('get', help='get', formatter_class=CustomHelpFormatter)
     get_parser.set_defaults(func=get)

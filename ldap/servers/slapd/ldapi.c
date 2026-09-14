@@ -163,6 +163,7 @@ slapd_bind_local_user(Connection *conn)
     gid_t gid = conn->c_local_gid;
     char *auth_dn = NULL;
     int32_t ret = -1;
+    int32_t log_format = config_get_accesslog_log_format();
 
     uid_t proc_uid = geteuid();
     gid_t proc_gid = getegid();
@@ -198,14 +199,18 @@ slapd_bind_local_user(Connection *conn)
                             /* All looks good, now do the bind */
                             bind_credentials_set_nolock(conn, SLAPD_AUTH_OS, auth_dn,
                                                         NULL, NULL, NULL, NULL);
+                        } else {
+                            slapi_ch_free_string(&auth_dn);
                         }
                         /* all done here */
+                        slapi_entry_free(e);
                         slapi_rwlock_unlock(dn_mapping_lock);
                         goto done;
                     } else {
                         slapi_log_err(SLAPI_LOG_ERR, "slapd_bind_local_user",
                                 "LDAPI auth mapping for (%s) points to entry that does not exist\n",
                                 auth_dn);
+                        slapi_ch_free_string(&auth_dn);
                         break;
                     }
                 }
@@ -339,11 +344,13 @@ slapd_bind_local_user(Connection *conn)
                         0  /* don't send ldap result */
                         );
 
-                    if (1 == ret)
+                    if (1 == ret) {
                         /* sorry root,
                          * just not cool enough
                          */
+                        slapi_ch_free_string(&root_dn);
                         goto root_map_free;
+                    }
                 }
 
                 /* it's ok not to find the entry,
@@ -388,7 +395,21 @@ done:
     /* if all fails, the peer is anonymous */
     if (conn->c_dn) {
         /* log the auto bind */
-        slapi_log_access(LDAP_DEBUG_STATS, "conn=%" PRIu64 " AUTOBIND dn=\"%s\"\n", conn->c_connid, conn->c_dn);
+
+        if (log_format != LOG_FORMAT_DEFAULT) {
+            /* JSON logging */
+            slapd_log_pblock logpb = {0};
+            slapd_log_pblock_init(&logpb, log_format, NULL);
+            logpb.conn_time = conn->c_starttime;
+            logpb.conn_id = conn->c_connid;
+            logpb.op_id = -1;
+            logpb.bind_dn = conn->c_dn;
+            slapd_log_access_autobind(&logpb);
+        } else {
+            slapi_log_access(LDAP_DEBUG_STATS,
+                             "conn=%" PRIu64 " AUTOBIND dn=\"%s\"\n",
+                             conn->c_connid, conn->c_dn);
+        }
     }
 
     return ret;

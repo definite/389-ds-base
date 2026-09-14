@@ -1,34 +1,38 @@
 import cockpit from "cockpit";
 import React from "react";
 import {
-    Button,
-    Form,
-    FormGroup,
-    FormSelect,
-    FormSelectOption,
-    Modal,
-    ModalVariant,
-    Select,
-    SelectOption,
-    SelectVariant,
-    SimpleList,
-    SimpleListItem,
-    Spinner,
-    Tab,
-    Tabs,
-    TabTitleText,
-    Tooltip,
-    TextInput,
-    Text,
-    TextContent,
-    TextVariants,
-    ValidatedOptions,
-} from "@patternfly/react-core";
+	Button,
+	Form,
+	FormGroup,
+	FormSelect,
+	FormSelectOption,
+	FormHelperText,
+	HelperText,
+	HelperTextItem,
+	Modal,
+	ModalVariant,
+	SimpleList,
+	SimpleListItem,
+	Spinner,
+	Tab,
+	Tabs,
+	TabTitleText,
+	Tooltip,
+	TextInput,
+	Text,
+	TextContent,
+	TextVariants,
+	ValidatedOptions
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
+import {
+    ExclamationCircleIcon,
+} from '@patternfly/react-icons';
 
 import { ManagedDefinitionTable, ManagedTemplateTable } from "./pluginTables.jsx";
 import PluginBasicConfig from "./pluginBasicConfig.jsx";
 import PropTypes from "prop-types";
-import { log_cmd, valid_dn, listsEqual } from "../tools.jsx";
+import { log_cmd, valid_dn, listsEqual, getApiErrorMessage } from "../tools.jsx";
 import { DoubleConfirmModal } from "../notifications.jsx";
 
 const _ = cockpit.gettext;
@@ -108,7 +112,7 @@ class ManagedEntries extends React.Component {
                 isRDNOpen: false
             });
         };
-        this.handleRDNToggle = isRDNOpen => {
+        this.handleRDNToggle = (_event, isRDNOpen) => {
             this.setState({
                 isRDNOpen
             });
@@ -128,7 +132,7 @@ class ManagedEntries extends React.Component {
             });
         };
 
-        this.handleStaticToggle = isStaticOpen => {
+        this.handleStaticToggle = (_event, isStaticOpen) => {
             this.setState({
                 isStaticOpen
             });
@@ -155,7 +159,7 @@ class ManagedEntries extends React.Component {
             });
         };
 
-        this.handleMappedToggle = isMappedOpen => {
+        this.handleMappedToggle = (_event, isMappedOpen) => {
             this.setState({
                 isMappedOpen
             });
@@ -278,7 +282,7 @@ class ManagedEntries extends React.Component {
 
         log_cmd("loadConfigs", "Get Managed Entries templates", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const myObject = JSON.parse(content);
                     let defCreateDisabled = false;
@@ -317,7 +321,7 @@ class ManagedEntries extends React.Component {
                     ];
                     log_cmd("loadConfigs", "Get Managed Entries Plugin definitions", cmd);
                     cockpit
-                            .spawn(cmd, { superuser: true, err: "message" })
+                            .spawn(cmd, { superuser: "require", err: "message" })
                             .done(content => {
                                 const myObject = JSON.parse(content);
                                 const tableKey = this.state.tableKey + 1;
@@ -328,9 +332,9 @@ class ManagedEntries extends React.Component {
                                 });
                             })
                             .fail(err => {
-                                const errMsg = JSON.parse(err);
+                                const errMsg = getApiErrorMessage(err);
                                 if (err !== 0) {
-                                    console.log("loadConfigs failed getting definitions", errMsg.desc);
+                                    console.log("loadConfigs failed getting definitions", errMsg);
                                 }
                                 this.setState({
                                     loading: false
@@ -338,9 +342,9 @@ class ManagedEntries extends React.Component {
                             });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     if (err !== 0) {
-                        console.log("loadConfigs failed getting templates", errMsg.desc);
+                        console.log("loadConfigs failed getting templates", errMsg);
                     }
                     this.setState({
                         loading: false
@@ -384,7 +388,7 @@ class ManagedEntries extends React.Component {
             log_cmd("openTempModal", "Fetch the Managed Entries template entry", cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
@@ -580,7 +584,7 @@ class ManagedEntries extends React.Component {
             log_cmd("openDefModal", "Fetch the Managed Entries Plugin definition config entry", cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
@@ -647,7 +651,7 @@ class ManagedEntries extends React.Component {
         log_cmd("deleteDefConfig", "Delete the Managed Entries Plugin definition entry", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -659,10 +663,10 @@ class ManagedEntries extends React.Component {
                     this.loadConfigs();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the definition entry removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during the definition entry removal operation - $0"), errMsg)
                     );
                     this.loadConfigs();
                 });
@@ -703,7 +707,7 @@ class ManagedEntries extends React.Component {
         log_cmd("cmdDefOperation", `Do the ${action} operation on the Managed Entries Plugin`, cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -716,10 +720,10 @@ class ManagedEntries extends React.Component {
                     this.handleCloseDefModal();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the config entry $0 operation - $1"), action, errMsg.desc)
+                        cockpit.format(_("Error during the config entry $0 operation - $1"), action, errMsg)
                     );
                     this.loadConfigs();
                     this.handleCloseDefModal();
@@ -788,23 +792,23 @@ class ManagedEntries extends React.Component {
         );
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
                     this.props.addNotification(
                         "success",
-                        cockpit.format(_("Config entry $0 was successfully $1ed"), templateDN, action)
+                        cockpit.format(_("Config entry $0 was successfully $1"), templateDN, action + "ed")
                     );
                     this.loadConfigs();
                     this.handleCloseTempModal();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.handleCloseTempModal();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the template entry $0 operation - $1"), action, errMsg.desc)
+                        cockpit.format(_("Error during the template entry $0 operation - $1"), action, errMsg)
                     );
                     this.toggleLoading();
                 });
@@ -828,7 +832,7 @@ class ManagedEntries extends React.Component {
         log_cmd("deleteTemplate", "Delete the Managed Entries Plugin template entry", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -840,10 +844,10 @@ class ManagedEntries extends React.Component {
                     this.closeTempDeleteConfirm();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the template entry removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during the template entry removal operation - $0"), errMsg)
                     );
                     this.closeTempDeleteConfirm();
                     this.toggleLoading();
@@ -869,7 +873,7 @@ class ManagedEntries extends React.Component {
         ];
         log_cmd("getAttributes", "Get attrs", attr_cmd);
         cockpit
-                .spawn(attr_cmd, { superuser: true, err: "message" })
+                .spawn(attr_cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const attrContent = JSON.parse(content);
                     const attrs = [];
@@ -881,8 +885,8 @@ class ManagedEntries extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
-                    this.props.addNotification("error", cockpit.format(_("Failed to get attributes - $0"), errMsg.desc));
+                    const errMsg = getApiErrorMessage(err);
+                    this.props.addNotification("error", cockpit.format(_("Failed to get attributes - $0"), errMsg));
                 });
     }
 
@@ -976,6 +980,11 @@ class ManagedEntries extends React.Component {
             templateAddMappedShow,
         } = this.state;
 
+        const isOriginScopeValidated = originScope !== "" && !valid_dn(originScope);
+        const isManagedBaseValidated = managedBase !== "" && !valid_dn(managedBase);
+        const isConfigAreaValidated = configArea !== "" && !valid_dn(configArea);
+        const isTemplateDNValidated = templateDN !== "" && !valid_dn(templateDN);
+
         const specificPluginCMD = [
             "dsconf",
             "-j",
@@ -1027,7 +1036,7 @@ class ManagedEntries extends React.Component {
                                 id="configName"
                                 aria-describedby="configName"
                                 name="configName"
-                                onChange={this.handleFieldChange}
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
                                 isDisabled={!newDefEntry}
                                 isRequired
                             />
@@ -1035,12 +1044,6 @@ class ManagedEntries extends React.Component {
                         <FormGroup
                             label={_("Subtree Scope")}
                             fieldId="originScope"
-                            helperTextInvalid={_("A valid DN must be provided")}
-                            validated={
-                                originScope !== "" && !valid_dn(originScope)
-                                    ? ValidatedOptions.error
-                                    : ValidatedOptions.default
-                            }
                             title={_("Sets the search base DN to use to find candidate entries (originScope)")}
                             isRequired
                         >
@@ -1050,14 +1053,20 @@ class ManagedEntries extends React.Component {
                                 id="originScope"
                                 aria-describedby="originScope"
                                 name="originScope"
-                                onChange={this.handleFieldChange}
-                                validated={
-                                    originScope !== "" && !valid_dn(originScope)
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
+                                validated={isOriginScopeValidated
                                         ? ValidatedOptions.error
                                         : ValidatedOptions.default
                                 }
                                 isRequired
                             />
+                            <FormHelperText>
+                                    <HelperText>
+                                    <HelperTextItem icon={<ExclamationCircleIcon />} variant={isOriginScopeValidated ? 'error' : 'default'}>
+                                        {isOriginScopeValidated ? 'A valid DN must be provided' : 'Enter DN'}
+                                    </HelperTextItem>
+                                    </HelperText>
+                            </FormHelperText>
                         </FormGroup>
                         <FormGroup
                             label={_("Filter")}
@@ -1071,19 +1080,13 @@ class ManagedEntries extends React.Component {
                                 id="originFilter"
                                 aria-describedby="originFilter"
                                 name="originFilter"
-                                onChange={this.handleFieldChange}
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
                                 isRequired
                             />
                         </FormGroup>
                         <FormGroup
                             label={_("Managed Base")}
                             fieldId="managedBase"
-                            helperTextInvalid={_("A valid DN must be provided")}
-                            validated={
-                                managedBase !== "" && !valid_dn(managedBase)
-                                    ? ValidatedOptions.error
-                                    : ValidatedOptions.default
-                            }
                             title={_("Sets the subtree where the managed entries are created (managedBase)")}
                             isRequired
                         >
@@ -1093,14 +1096,20 @@ class ManagedEntries extends React.Component {
                                 id="managedBase"
                                 aria-describedby="managedBase"
                                 name="managedBase"
-                                onChange={this.handleFieldChange}
-                                validated={
-                                    managedBase !== "" && !valid_dn(managedBase)
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
+                                validated={isManagedBaseValidated
                                         ? ValidatedOptions.error
                                         : ValidatedOptions.default
                                 }
                                 isRequired
                             />
+                            <FormHelperText>
+                                    <HelperText>
+                                    <HelperTextItem icon={<ExclamationCircleIcon />} variant={isManagedBaseValidated ? 'error' : 'default'}>
+                                        {isManagedBaseValidated ? 'A valid DN must be provided' : 'Enter DN'}
+                                    </HelperTextItem>
+                                    </HelperText>
+                            </FormHelperText>
                         </FormGroup>
                         <FormGroup
                             label={_("Template")}
@@ -1111,7 +1120,7 @@ class ManagedEntries extends React.Component {
                             <FormSelect
                                 id="managedTemplate"
                                 value={managedTemplate}
-                                onChange={this.handleFieldChange}
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
                                 aria-label="FormSelect Input"
                             >
                                 {templateOptions.map((option, index) => (
@@ -1146,12 +1155,6 @@ class ManagedEntries extends React.Component {
                         <FormGroup
                             label={_("Template DN")}
                             fieldId="templateDN"
-                            helperTextInvalid={_("The template DN must be set to a valid DN")}
-                            validated={
-                                templateDN !== "" && !valid_dn(templateDN)
-                                    ? ValidatedOptions.error
-                                    : ValidatedOptions.default
-                            }
                             title={_("DN of the template entry")}
                             isRequired
                         >
@@ -1161,14 +1164,20 @@ class ManagedEntries extends React.Component {
                                 id="templateDN"
                                 aria-describedby="templateDN"
                                 name="templateDN"
-                                onChange={this.handleFieldChange}
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
                                 isDisabled={!newTemplateEntry}
-                                validated={
-                                    templateDN !== "" && !valid_dn(templateDN)
+                                validated={isTemplateDNValidated
                                         ? ValidatedOptions.error
                                         : ValidatedOptions.default
                                 }
                             />
+                            <FormHelperText>
+                                    <HelperText>
+                                    <HelperTextItem icon={<ExclamationCircleIcon />} variant={isTemplateDNValidated ? 'error' : 'default'}>
+                                        {isTemplateDNValidated ? 'The template DN must be set to a valid DN' : 'Enter DN'}
+                                    </HelperTextItem>
+                                    </HelperText>
+                            </FormHelperText>
                         </FormGroup>
                         <FormGroup
                             label={_("RDN Attribute")}
@@ -1176,24 +1185,16 @@ class ManagedEntries extends React.Component {
                             title={_("DN of the template entry")}
                             isRequired
                         >
-                            <Select
-                                variant={SelectVariant.typeahead}
-                                typeAheadAriaLabel="Type an attribute"
-                                onToggle={this.handleRDNToggle}
+                            <TypeaheadSelect
+                                selected={templateRDNAttr}
                                 onSelect={this.handleRDNSelect}
                                 onClear={this.handleClearRDNSelection}
-                                selections={templateRDNAttr}
+                                options={attributes}
                                 isOpen={this.state.isRDNOpen}
-                                aria-labelledby="typeAhead-rdn"
-                                placeholderText={_("Type an attribute...")}
-                            >
-                                {attributes.map((attr) => (
-                                    <SelectOption
-                                        key={attr}
-                                        value={attr}
-                                    />
-                                ))}
-                            </Select>
+                                onToggle={this.handleRDNToggle}
+                                placeholder={_("Type an attribute...")}
+                                ariaLabel="Type an attribute"
+                            />
                         </FormGroup>
                     </Form>
                     <Form className="ds-margin-top-lg" autoComplete="off">
@@ -1310,24 +1311,16 @@ class ManagedEntries extends React.Component {
                             fieldId="staticAttr"
                             title={_("The attribute that is set in the managed entry")}
                         >
-                            <Select
-                                variant={SelectVariant.typeahead}
-                                typeAheadAriaLabel="Type an attribute"
-                                onToggle={this.handleStaticToggle}
+                            <TypeaheadSelect
+                                selected={this.state.staticAttr}
                                 onSelect={this.handleStaticSelect}
                                 onClear={this.handleClearStaticSelection}
-                                selections={this.state.staticAttr}
+                                options={attributes}
                                 isOpen={this.state.isStaticOpen}
-                                aria-labelledby="typeAhead-static"
-                                placeholderText={_("Type an attribute...")}
-                            >
-                                {attributes.map((attr) => (
-                                    <SelectOption
-                                        key={attr}
-                                        value={attr}
-                                    />
-                                ))}
-                            </Select>
+                                onToggle={this.handleStaticToggle}
+                                placeholder={_("Type an attribute...")}
+                                ariaLabel="Type an attribute"
+                            />
                         </FormGroup>
                         <FormGroup
                             className="ds-margin-top-lg"
@@ -1341,7 +1334,7 @@ class ManagedEntries extends React.Component {
                                 id="staticValue"
                                 aria-describedby="staticValue"
                                 name="staticValue"
-                                onChange={this.handleFieldChange}
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
                                 isRequired
                             />
                         </FormGroup>
@@ -1375,24 +1368,16 @@ class ManagedEntries extends React.Component {
                             fieldId="mappedAttr"
                             title={_("The attribute that is set in the managed entry")}
                         >
-                            <Select
-                                variant={SelectVariant.typeahead}
-                                typeAheadAriaLabel="Type an attribute"
-                                onToggle={this.handleMappedToggle}
+                            <TypeaheadSelect
+                                selected={this.state.mappedAttr}
                                 onSelect={this.handleMappedSelect}
                                 onClear={this.handleClearMappedSelection}
-                                selections={this.state.mappedAttr}
+                                options={attributes}
                                 isOpen={this.state.isMappedOpen}
-                                aria-labelledby="typeAhead-static"
-                                placeholderText={_("Type an attribute...")}
-                            >
-                                {attributes.map((attr) => (
-                                    <SelectOption
-                                        key={attr}
-                                        value={attr}
-                                    />
-                                ))}
-                            </Select>
+                                onToggle={this.handleMappedToggle}
+                                placeholder={_("Type an attribute...")}
+                                ariaLabel="Type an attribute"
+                            />
                         </FormGroup>
                         <FormGroup
                             label={_("Mapped Value")}
@@ -1406,7 +1391,7 @@ class ManagedEntries extends React.Component {
                                 id="mappedValue"
                                 aria-describedby="mappedValue"
                                 name="mappedValue"
-                                onChange={this.handleFieldChange}
+                                onChange={(e, str) => this.handleFieldChange(str, e)}
                             />
                         </FormGroup>
                         <hr />
@@ -1462,7 +1447,7 @@ class ManagedEntries extends React.Component {
                                         deleteConfig={this.showTempDeleteConfirm}
                                     />
                                     <Button
-                                        className="ds-left-margin"
+                                        className="ds-margin-top"
                                         variant="primary"
                                         onClick={this.handleShowAddTempModal}
                                     >
@@ -1494,7 +1479,7 @@ class ManagedEntries extends React.Component {
                                         deleteConfig={this.showDefDeleteConfirm}
                                     />
                                     <Button
-                                        className="ds-left-margin"
+                                        className="ds-margin-top"
                                         variant="primary"
                                         onClick={this.handleShowAddDefModal}
                                         isDisabled={this.state.defCreateDisabled}
@@ -1509,12 +1494,6 @@ class ManagedEntries extends React.Component {
                                 <FormGroup
                                     label={_("Shared Config Area")}
                                     fieldId="configArea"
-                                    helperTextInvalid={_("The DN for the shared conifig area is invalid")}
-                                    validated={
-                                        configArea !== "" && !valid_dn(configArea)
-                                            ? ValidatedOptions.error
-                                            : ValidatedOptions.default
-                                    }
                                 >
                                     <TextInput
                                         value={configArea}
@@ -1522,8 +1501,18 @@ class ManagedEntries extends React.Component {
                                         id="configArea"
                                         aria-describedby="configArea"
                                         name="configArea"
-                                        onChange={this.handleFieldChange}
+                                        onChange={(e, str) => this.handleFieldChange(str, e)}
+                                        validated={isConfigAreaValidated
+                                                ? ValidatedOptions.error
+                                                : ValidatedOptions.default}
                                     />
+                                    <FormHelperText>
+                                            <HelperText>
+                                            <HelperTextItem icon={<ExclamationCircleIcon />} variant={isManagedBaseValidated ? 'error' : 'default'}>
+                                                {isConfigAreaValidated ? 'The DN for the shared conifig area is invalid' : 'Enter DN'}
+                                            </HelperTextItem>
+                                            </HelperText>
+                                    </FormHelperText>
                                 </FormGroup>
                             </Form>
                         </div>

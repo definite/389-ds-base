@@ -1,27 +1,29 @@
 import cockpit from "cockpit";
 import React from 'react';
 import {
-    Alert,
-    Card,
-    CardBody,
-    CardTitle,
-    Checkbox,
-    FormSelect,
-    FormSelectOption,
-    Grid,
-    GridItem,
-    Label,
-    LabelGroup,
-    SimpleList,
-    SimpleListItem,
-    Spinner,
-    Text,
-    TextContent,
-    TextInput,
-    TextVariants,
-    ValidatedOptions,
-    Wizard
+	Alert,
+	Card,
+	CardBody,
+	CardTitle,
+	Checkbox,
+	FormSelect,
+	FormSelectOption,
+	Grid,
+	GridItem,
+	Label,
+	LabelGroup,
+	SimpleList,
+	SimpleListItem,
+	Spinner,
+	Text,
+	TextContent,
+	TextInput,
+	TextVariants,
+	ValidatedOptions
 } from '@patternfly/react-core';
+import {
+	Wizard
+} from '@patternfly/react-core/deprecated';
 import LdapNavigator from '../../lib/ldapNavigator.jsx';
 import {
     getBaseLevelEntryAttributes,
@@ -78,7 +80,9 @@ class RenameEntry extends React.Component {
                         result.output = _("Successfully renamed entry");
                     }
                     this.setState({
-                        commandOutput: result.errorCode === 0 ? _("Successfully renamed entry!") : _("Failed to rename entry, error: ") + result.errorCode,
+                        commandOutput: result.errorCode === 0 ?
+                            _("Successfully renamed entry!") :
+                            _("Failed to rename entry: ") + result.output,
                         resultVariant: result.errorCode === 0 ? 'success' : 'danger',
                         renaming: false
                     });
@@ -116,7 +120,7 @@ class RenameEntry extends React.Component {
             });
         };
 
-        this.handleDelRdnChange = (checked) => {
+        this.handleDelRdnChange = (_event, checked) => {
             this.setState({
                 deleteOldRdn: checked
             });
@@ -220,7 +224,7 @@ class RenameEntry extends React.Component {
                         <FormSelect
                             id="naming-attr"
                             value={newRdnAttr}
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.handleRdnAttrChange(str);
                             }}
                             aria-label="FormSelect Input"
@@ -242,7 +246,7 @@ class RenameEntry extends React.Component {
                             id="naming-val"
                             aria-describedby="horizontal-form-name-helper"
                             name="rdnVal"
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.handleRdnValChange(str);
                             }}
                             validated={newRdnVal === "" ? ValidatedOptions.error : ValidatedOptions.default}
@@ -253,7 +257,7 @@ class RenameEntry extends React.Component {
                             className="ds-margin-top-lg"
                             id="deleteoldrdn"
                             isChecked={this.state.deleteOldRdn}
-                            onChange={this.handleDelRdnChange}
+                            onChange={(event, isChecked) => this.handleDelRdnChange(event, isChecked)}
                             label={_("Delete the old RDN attribute from the entry")}
                         />
                     </div>
@@ -280,6 +284,7 @@ class RenameEntry extends React.Component {
                         editorLdapServer={this.props.editorLdapServer}
                         handleNodeOnClick={this.onBaseDnSelection}
                         showTreeLoadingState={this.showTreeLoadingState}
+                        addNotification={this.props.addNotification}
                     />
                 </CardBody>
             </>
@@ -366,7 +371,7 @@ class RenameEntry extends React.Component {
         );
 
         const ldifListItems = ldifArray.map((line, index) =>
-            <SimpleListItem key={index} isCurrent={line.startsWith('dn: ')}>
+            <SimpleListItem key={index} isActive={line.startsWith('dn: ')}>
                 {line}
             </SimpleListItem>
         );
@@ -460,7 +465,7 @@ class RenameEntry extends React.Component {
                 component: reviewStep,
                 nextButtonText: _("Finish"),
                 canJumpTo: stepIdReached > 5,
-                hideBackButton: true,
+                hideBackButton: this.state.resultVariant === "success" ? true : false,
                 enableNext: !this.state.renaming
             }
         ];

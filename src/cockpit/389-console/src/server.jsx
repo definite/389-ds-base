@@ -1,6 +1,6 @@
 import cockpit from "cockpit";
 import React from "react";
-import { log_cmd } from "./lib/tools.jsx";
+import { log_cmd, getApiErrorMessage } from "./lib/tools.jsx";
 import PropTypes from "prop-types";
 import { ServerSettings } from "./lib/server/settings.jsx";
 import { ServerTuning } from "./lib/server/tuning.jsx";
@@ -13,22 +13,20 @@ import { ServerErrorLog } from "./lib/server/errorLog.jsx";
 import { ServerSecurityLog } from "./lib/server/securityLog.jsx";
 import { Security } from "./security.jsx";
 import {
+    Card,
     Spinner,
     TreeView,
     Text,
     TextContent,
     TextVariants,
 } from "@patternfly/react-core";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faBook,
-} from '@fortawesome/free-solid-svg-icons';
 import {
     CatalogIcon,
     CogIcon,
     KeyIcon,
     TachometerAltIcon,
     LockIcon,
+    BookIcon,
     RouteIcon
 } from '@patternfly/react-icons';
 
@@ -87,7 +85,7 @@ export class Server extends React.Component {
         ];
         log_cmd("getAttributes", "Get attributes for audit log display attributes", attr_cmd);
         cockpit
-                .spawn(attr_cmd, { superuser: true, err: "message" })
+                .spawn(attr_cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const attrContent = JSON.parse(content);
                     const attrs = [];
@@ -111,7 +109,7 @@ export class Server extends React.Component {
         ];
         log_cmd("loadConfig", "Load server configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.attrs;
@@ -124,13 +122,13 @@ export class Server extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.setState({
                         loaded: true
                     });
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error loading server configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error loading server configuration - $0"), errMsg)
                     );
                 });
     }
@@ -142,7 +140,7 @@ export class Server extends React.Component {
         ];
         log_cmd("reloadConfig", "Reload server configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.attrs;
@@ -151,10 +149,10 @@ export class Server extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error reloading server configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error reloading server configuration - $0"), errMsg)
                     );
                 });
     }
@@ -194,27 +192,27 @@ export class Server extends React.Component {
                 children: [
                     {
                         name: _("Access Log"),
-                        icon: <FontAwesomeIcon size="sm" icon={faBook} />,
+                        icon: <BookIcon size="sm" />,
                         id: "access-log-config",
                     },
                     {
                         name: _("Audit Log"),
-                        icon: <FontAwesomeIcon size="sm" icon={faBook} />,
+                        icon: <BookIcon size="sm" />,
                         id: "audit-log-config",
                     },
                     {
                         name: _("Audit Failure Log"),
-                        icon: <FontAwesomeIcon size="sm" icon={faBook} />,
+                        icon: <BookIcon size="sm" />,
                         id: "auditfail-log-config",
                     },
                     {
                         name: _("Errors Log"),
-                        icon: <FontAwesomeIcon size="sm" icon={faBook} />,
+                        icon: <BookIcon size="sm" />,
                         id: "error-log-config",
                     },
                     {
                         name: _("Security Log"),
-                        icon: <FontAwesomeIcon size="sm" icon={faBook} />,
+                        icon: <BookIcon size="sm" />,
                         id: "security-log-config",
                     }
                 ],
@@ -309,6 +307,7 @@ export class Server extends React.Component {
                         attrs={this.state.attrs}
                         enableTree={this.enableTree}
                         addNotification={this.props.addNotification}
+                        reload={this.reloadConfig}
                     />
                 );
             } else if (this.state.node_name === "audit-log-config") {
@@ -319,6 +318,7 @@ export class Server extends React.Component {
                         displayAttrs={this.state.displayAttrs}
                         enableTree={this.enableTree}
                         addNotification={this.props.addNotification}
+                        reload={this.reloadConfig}
                     />
                 );
             } else if (this.state.node_name === "auditfail-log-config") {
@@ -328,6 +328,7 @@ export class Server extends React.Component {
                         attrs={this.state.attrs}
                         enableTree={this.enableTree}
                         addNotification={this.props.addNotification}
+                        reload={this.reloadConfig}
                     />
                 );
             } else if (this.state.node_name === "error-log-config") {
@@ -337,6 +338,7 @@ export class Server extends React.Component {
                         attrs={this.state.attrs}
                         enableTree={this.enableTree}
                         addNotification={this.props.addNotification}
+                        reload={this.reloadConfig}
                     />
                 );
             } else if (this.state.node_name === "security-log-config") {
@@ -346,6 +348,7 @@ export class Server extends React.Component {
                         attrs={this.state.attrs}
                         enableTree={this.enableTree}
                         addNotification={this.props.addNotification}
+                        reload={this.reloadConfig}
                     />
                 );
             }
@@ -353,7 +356,7 @@ export class Server extends React.Component {
             serverPage = (
                 <div className="container-fluid">
                     <div className="ds-container">
-                        <div className="ds-tree">
+                        <Card className="ds-tree">
                             <div
                                 className={disabled}
                                 id="server-tree"
@@ -364,7 +367,7 @@ export class Server extends React.Component {
                                     onSelect={this.handleTreeClick}
                                 />
                             </div>
-                        </div>
+                        </Card>
                         <div className="ds-tree-content">
                             {server_element}
                         </div>

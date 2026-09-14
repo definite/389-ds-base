@@ -1,5 +1,5 @@
 # --- BEGIN COPYRIGHT BLOCK ---
-# Copyright (C) 2023 Red Hat, Inc.
+# Copyright (C) 2026 Red Hat, Inc.
 # All rights reserved.
 #
 # License: GPL (version 3 or any later version).
@@ -9,11 +9,13 @@
 
 from subprocess import check_output, PIPE, run
 from lib389 import DirSrv
+from lib389.idm.account import Account
 from lib389.idm.user import UserAccount, UserAccounts
 import pytest
 from lib389.tasks import *
 from lib389.utils import *
-from lib389.topologies import topology_st
+from lib389.dseutils import get_ldapurl_from_serverid
+from test389.topologies import topology_st
 from lib389.dbgen import dbgen_users
 from lib389.idm.organizationalunit import OrganizationalUnits
 from lib389._constants import DN_DM, PASSWORD, PW_DM, ReplicaRole
@@ -64,11 +66,7 @@ ROOTDSE_DEF_ATTR_LIST = ('namingContexts',
 # (should have more connections with lmdb)
 MAX_FDS = 150
 
-
-
 default_paths = Paths()
-
-
 
 log = logging.getLogger(__name__)
 DEBUGGING = os.getenv("DEBUGGING", default=False)
@@ -84,7 +82,7 @@ class CustomSetup():
     DEFAULT_SLAPD = { 'root_password': PW_DM,
                       'defaults': INSTALL_LATEST_CONFIG,
                     }
-    DEFAULT_BACKENDS = [ { 
+    DEFAULT_BACKENDS = [ {
                             'cn': 'userroot',
                             'nsslapd-suffix': DEFAULT_SUFFIX,
                             'sample_entries': 'yes',
@@ -93,7 +91,7 @@ class CustomSetup():
 
     WRAPPER_FORMAT = '''#!/bin/sh
 {wrapper_options}
-exec {nsslapd} -D {cfgdir} -i {pidfile} 
+exec {nsslapd} -D {cfgdir} -i {pidfile}
 '''
 
 
@@ -101,14 +99,14 @@ exec {nsslapd} -D {cfgdir} -i {pidfile}
         def __init__(self, verbose=False, external_log=log):
             super().__init__(verbose=verbose, external_log=external_log)
             self.wrapper = None       # placeholder for the wrapper file name
-            
+
         def _reset_systemd(self):
             self.systemd_override = False
-    
+
         def status(self):
             self._reset_systemd()
             return super().status()
-    
+
         def start(self, timeout=120, *args):
             if self.status():
                 return
@@ -128,14 +126,13 @@ exec {nsslapd} -D {cfgdir} -i {pidfile}
                 if self.status():
                     return
                 time.sleep(1)
-            raise TimeoutException('Failed to start ns-slpad')
-    
+            raise TimeoutError('Failed to start ns-slpad')
+
         def stop(self, timeout=120):
             self._reset_systemd()
             super().stop(timeout=timeout)
-    
 
-    def _search_be(belist, beinfo):
+    def _search_be(self, belist, beinfo):
         for be in belist:
             if be['cn'] == beinfo['cn']:
                 return be
@@ -163,7 +160,7 @@ exec {nsslapd} -D {cfgdir} -i {pidfile}
                     general_options.set(key,val)
         log.debug('[general]: %s' % general_options._options)
         self.general = general_options
-        
+
         slapd_options = Slapd2Base(self.log)
         slapd_options.set('instance_name', serverid)
         for d in (CustomSetup.DEFAULT_SLAPD, slapd):
@@ -178,7 +175,7 @@ exec {nsslapd} -D {cfgdir} -i {pidfile}
             if not backend_list:
                 continue
             for backend in backend_list:
-                target_be = CustomSetup._search_be(backend_options, backend)
+                target_be = CustomSetup._search_be(self, backend_options, backend)
                 if not target_be:
                     target_be = {}
                     backend_options.append(target_be)
@@ -196,7 +193,7 @@ exec {nsslapd} -D {cfgdir} -i {pidfile}
         args["SER_SECURE_PORT"] = slapd['secure_port']
         args["SER_SERVERID_PROP"] = self.serverid
         return args
-	
+
     def create_instance(self):
         sds = SetupDs(verbose=self.verbose, dryrun=False, log=self.log)
         self.general.verify()
@@ -256,7 +253,7 @@ def _reset_attr(request, topology_st):
             dm_conn.config.replace('nsslapd-close-on-failed-bind', 'off')
             assert (dm_conn.config.get_attr_val_utf8('nsslapd-close-on-failed-bind')) == 'off'
         except ldap.LDAPError as e:
-            log.error('Failure reseting attr')
+            log.error('Failure reseting attr: ' + str(e))
             assert False
         topology_st.standalone.restart()
 
@@ -498,6 +495,72 @@ def test_basic_ops(topology_st, import_example_ldif):
     check_db_sanity(topology_st)
     log.info('test_basic_ops: PASSED')
 
+def test_basic_search_asynch(topology_st, request):
+    """
+    Tests asynchronous searches generate string 'notes=B'
+    and 'notes=N' in access logs
+
+    :id: 1b761421-d2bb-487b-813e-2278123fd13c
+    :parametrized: no
+    :setup: Standalone instance, create test user to search with filter (uid=*).
+
+    :steps:
+        1. Create a test user
+        2. trigger async searches
+        3. Verify access logs contains 'notes=B' up to 10 attempts
+        4. Verify access logs contains 'notes=N' up to 10 attempts
+
+    :expectedresults:
+        1. Success
+        2. Success
+        3. Success
+        4. Success
+
+    """
+
+    log.info('Running test_basic_search_asynch...')
+
+    search_filter = "(uid=*)"
+    topology_st.standalone.restart()
+    topology_st.standalone.config.set("nsslapd-accesslog-logbuffering", "off")
+    topology_st.standalone.config.set("nsslapd-maxthreadsperconn", "3")
+
+    try:
+        users = UserAccounts(topology_st.standalone, DEFAULT_SUFFIX, rdn=None)
+        user = users.create_test_user()
+    except ldap.LDAPError as e:
+        log.fatal('Failed to create test user: error ' + e.args[0]['desc'])
+        assert False
+
+    for attempt in range(10):
+        msgids = []
+        for i in range(5):
+            searchid = topology_st.standalone.search(DEFAULT_SUFFIX, ldap.SCOPE_SUBTREE, search_filter)
+            msgids.append(searchid)
+
+        for msgid in msgids:
+            rtype, rdata = topology_st.standalone.result(msgid)
+
+        # verify if some operations got blocked
+        error_lines = topology_st.standalone.ds_access_log.match('.*notes=.*B.* details.*')
+        if len(error_lines) > 0:
+            log.info('test_basic_search_asynch: found "notes=B" after %d attempt(s)' % (attempt + 1))
+            break
+
+    assert attempt < 10
+
+    # verify if some operations got flagged Not synchronous
+    error_lines = topology_st.standalone.ds_access_log.match('.*notes=.*N.* details.*')
+    assert len(error_lines) > 0
+
+    def fin():
+        user.delete()
+        topology_st.standalone.config.set("nsslapd-accesslog-logbuffering", "on")
+        topology_st.standalone.config.set("nsslapd-maxthreadsperconn", "5")
+
+    request.addfinalizer(fin)
+
+    log.info('test_basic_search_asynch: PASSED')
 
 def test_basic_import_export(topology_st, import_example_ldif):
     """Test online and offline LDIF import & export
@@ -527,7 +590,7 @@ def test_basic_import_export(topology_st, import_example_ldif):
     #
     # Test online/offline LDIF imports
     #
-    topology_st.standalone.start()
+    topology_st.standalone.restart()
     # topology_st.standalone.config.set('nsslapd-errorlog-level', '1')
 
     # Generate a test ldif (50k entries)
@@ -542,11 +605,10 @@ def test_basic_import_export(topology_st, import_example_ldif):
     import_task.import_suffix_from_ldif(ldiffile=import_ldif, suffix=DEFAULT_SUFFIX)
 
     # Wait a bit till the task is created and available for searching
-    time.sleep(0.5)
+    time.sleep(1)
 
     # Good as place as any to quick test the task has some expected attributes
-    if ds_is_newer('1.4.1.2'):
-        assert import_task.present('nstaskcreated')
+    assert import_task.present('nstaskcreated')
     assert import_task.present('nstasklog')
     assert import_task.present('nstaskcurrentitem')
     assert import_task.present('nstasktotalitems')
@@ -625,6 +687,8 @@ def test_basic_backup(topology_st, import_example_ldif):
     """
 
     log.info('Running test_basic_backup...')
+
+    topology_st.standalone.restart()
 
     backup_dir = topology_st.standalone.get_bak_dir() + '/backup_test_online'
     log.info(f'Backup directory is {backup_dir}')
@@ -740,9 +804,9 @@ def test_basic_db2index(topology_st):
     topology_st.standalone.db2index(bename=DEFAULT_BENAME, attrs=indexes)
     log.info('Checking the server logs for %d backend indexes INFO' % numIndexes)
     for indexNum, index in enumerate(indexes):
-        if index in "entryrdn":
+        if index in ["entryrdn", "ancestorid"]:
             assert topology_st.standalone.searchErrorsLog(
-                f'INFO - {dbprefix}_db2index - {DEFAULT_BENAME}: Indexing {index}')
+                f'INFO - {dbprefix}_db2index - {DEFAULT_BENAME}: Indexing: {index}')
         else:
             assert topology_st.standalone.searchErrorsLog(
                 f'INFO - {dbprefix}_db2index - {DEFAULT_BENAME}: Indexing attribute: {index}')
@@ -967,7 +1031,7 @@ def test_basic_search_lookthroughlimit(topology_st, limit, resp, import_example_
     Tests normal search with lookthroughlimit set high and low.
 
     :id: b5119970-6c9f-41b7-9649-de9233226fec
-
+    :parametrized: yes
     :setup: Standalone instance, add example.ldif to the database, search filter (uid=*).
 
     :steps:
@@ -1116,9 +1180,17 @@ def test_basic_referrals(topology_st, import_example_ldif):
     assert bev.get_attr_val_utf8('nsslapd-state') == 'referral'
 
     log.info('Testing that a referral error is returned...')
+    log.info('When bound as directory manager')
     topology_st.standalone.set_option(ldap.OPT_REFERRALS, 0)  # Do not follow referral
     with pytest.raises(ldap.REFERRAL):
         topology_st.standalone.search_s(DEFAULT_SUFFIX, ldap.SCOPE_SUBTREE, 'objectclass=top')
+    log.info('When anonymous')
+    ldc = ldap.initialize(f'ldap://localhost:{topology_st.standalone.port}')
+    ldc.set_option(ldap.OPT_TIMEOUT, 5)
+    ldc.set_option(ldap.OPT_REFERRALS, 0)  # Do not follow referral
+    with pytest.raises(ldap.REFERRAL):
+        ldc.search_s(DEFAULT_SUFFIX, ldap.SCOPE_SUBTREE, 'objectclass=top')
+    ldc.unbind()
 
     # Make sure server can restart in referral mode
     log.info('Restarting the server...')
@@ -1509,6 +1581,26 @@ def test_bind_entry_missing_passwd(topology_st):
     with pytest.raises(ldap.INVALID_CREDENTIALS):
         # Bind as an entry under cn=config that does not exist
         user.bind("some_password")
+
+
+def test_bind_with_no_dn(topology_st):
+    """
+    :id: fedb831e-811e-11f1-8bfa-c85309d5c3e3
+    :setup: Standalone Instance
+    :steps:
+        1. Bind with no DN and no password
+        2. Bind with no DN and some password
+    :expectedresults:
+        1. Success
+        2. Fails with error 48
+    """
+    ldc = ldap.initialize(f'ldap://localhost:{topology_st.standalone.port}')
+    ldc.set_option(ldap.OPT_TIMEOUT, 5)
+    ldc.set_option(ldap.OPT_REFERRALS, 0)  # Do not follow referral
+    ldc.bind_s(None, None)
+    with pytest.raises(ldap.INAPPROPRIATE_AUTH):
+        ldc.bind_s(None, "Some password")
+    ldc.unbind()                   
 
 
 def test_connection_buffer_size(topology_st):
@@ -2372,7 +2464,7 @@ def dscreate_custom_instance(request):
 
     request.addfinalizer(fin)
     topo.create_instance()
-    # Return CustomSetup object associated with 
+    # Return CustomSetup object associated with
     #  a stopped instance named "custom"
     return topo
 
@@ -2395,7 +2487,6 @@ def dscreate_with_numlistener(request, dscreate_custom_instance):
     inst.start()
     inst.open()
     return inst
-
 
 @pytest.mark.skipif(ds_is_older('2.2.0.0'),
                     reason="This test is only required with multiple listener support.")
@@ -2456,6 +2547,26 @@ def test_conn_limits(dscreate_with_numlistener):
         c.unbind()
 
     # Step 6 is done in teardown phase by dscreate_instance finalizer
+
+
+@pytest.mark.skipif(not default_paths.asan_enabled, reason="Don't run if ASAN is not enabled")
+def test_bind_multiple_ava(topology_st):
+    """Check a bind with a specific dn.
+
+    :id: 1cd69646-a196-11f1-a7ac-c85309d5c3e3
+    :setup: standalone instance
+    :steps:
+        1. Try to perform a bind with specific DN
+        2. Rebind as Directory manager
+    :expectedresults:
+        1. Should raise ldap.INVALID_CREDENTIAL exception
+        2. Should success
+    """
+    inst = topology_st.standalone
+    with pytest.raises(ldap.INVALID_CREDENTIALS):
+        Account(inst, 'seeAlso=x+member="sn=b+cn=a",dc=com').bind('foo')
+    DirectoryManager(inst).rebind()
+
 
 if __name__ == '__main__':
     # Run isolated

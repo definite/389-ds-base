@@ -120,7 +120,8 @@ str2entry_state_information_from_type(struct berval *atype,
     *value_state = VALUE_PRESENT;
     *attr_state = ATTRIBUTE_PRESENT;
     while (p != NULL) {
-        if (p[3] == 'c' && p[4] == 's' && p[5] == 'n' && p[6] == '-') {
+        if (p[0] != '\0' && p[1] != '\0' && p[2] != '\0' &&
+            p[3] == 'c' && p[4] == 's' && p[5] == 'n' && p[6] == '-') {
             CSNType t = CSN_TYPE_UNKNOWN;
             if (p[1] == 'x' && p[2] == '1') {
                 t = CSN_TYPE_UNKNOWN;
@@ -188,8 +189,6 @@ str2entry_fast(const char *rawdn, const Slapi_RDN *srdn, const char *s, int flag
     Slapi_Entry *e;
     const char *next;
     char *ptype = NULL;
-    int nvals = 0;
-    int del_nvals = 0;
     unsigned long attr_val_cnt = 0;
     CSN *attributedeletioncsn = NULL; /* Moved to this level so that the JCM csn_free call below gets useful */
     CSNSet *valuecsnset = NULL;       /* Moved to this level so that the JCM csn_free call below gets useful */
@@ -286,8 +285,6 @@ str2entry_fast(const char *rawdn, const Slapi_RDN *srdn, const char *s, int flag
         if ((ptype == NULL) || (PL_strcasecmp(type.bv_val, ptype) != 0)) {
             slapi_ch_free_string(&ptype);
             ptype = PL_strndup(type.bv_val, type.bv_len);
-            nvals = 0;
-            del_nvals = 0;
             a = NULL;
         }
 
@@ -461,45 +458,18 @@ str2entry_fast(const char *rawdn, const Slapi_RDN *srdn, const char *s, int flag
                     /* break; ??? */
                 }
             }
-            /* moved the value setting code here to check Slapi_Attr 'a'
-             * to retrieve the attribute syntax info */
             svalue = value_new(NULL, CSN_TYPE_NONE, NULL);
-#ifdef OBSOLETE_DN_SYNTAX_CHECK
-            if (slapi_attr_is_dn_syntax_attr(*a)) {
-                int rc = 0;
-                char *dn_aval = NULL;
-                if (strict) {
-                    /* check that the dn is formatted correctly */
-                    rc = slapi_dn_syntax_check(NULL, value.bv_val, 1);
-                    if (rc) { /* syntax check failed */
-                        slapi_log_err(SLAPI_LOG_TRACE,
-                                      "str2entry_fast", "strict: Invalid DN value: %s: %s\n",
-                                      type.bv_val, value.bv_val);
-                        slapi_entry_free(e);
-                        if (freeval)
-                            slapi_ch_free_string(&value.bv_val);
-                        e = NULL;
-                        goto done;
-                    }
-                }
-                if (flags & SLAPI_STR2ENTRY_USE_OBSOLETE_DNFORMAT) {
-                    dn_aval = slapi_dn_normalize_original(value.bv_val);
-                    slapi_value_set(svalue, dn_aval, strlen(dn_aval));
-                } else {
-                    Slapi_DN *sdn = slapi_sdn_new_dn_byref(value.bv_val);
-                    /* Note: slapi_sdn_get_dn returns normalized DN with
-                     * case-intact. Thus, the length of dn_aval is
-                     * slapi_sdn_get_ndn_len(sdn). */
-                    dn_aval = (char *)slapi_sdn_get_dn(sdn);
-                    slapi_value_set(svalue, (void *)dn_aval,
-                                    slapi_sdn_get_ndn_len(sdn));
-                    slapi_sdn_free(&sdn);
-                }
-            } else {
-                slapi_value_set_berval(svalue, &value);
-            }
-#endif
             slapi_value_set_berval(svalue, &value);
+            if (slapi_attr_is_dn_syntax_attr(*a) &&
+                !(flags & SLAPI_STR2ENTRY_USE_OBSOLETE_DNFORMAT)) {
+                /* valueset_value_cmp uses slapi_utf8casecmp on raw bv_val
+                 * for DN syntax; normalize so the invariant holds. The
+                 * upgradedn path (SLAPI_STR2ENTRY_USE_OBSOLETE_DNFORMAT)
+                 * must preserve raw bytes, so skip it there. */
+                if (value_dn_normalize_value(svalue) == 0) {
+                    (*a)->a_flags |= SLAPI_ATTR_FLAG_NORMALIZED_CES;
+                }
+            }
             /* the memory below was not allocated by the slapi_ch_ functions */
             if (freeval)
                 slapi_ch_free_string(&value.bv_val);
@@ -518,7 +488,6 @@ str2entry_fast(const char *rawdn, const Slapi_RDN *srdn, const char *s, int flag
                     &(*a)->a_deleted_values,
                     svalue,
                     SLAPI_VALUE_FLAG_PASSIN);
-                del_nvals++;
             } else {
                 /* consumes the value */
                 slapi_valueset_add_attr_value_ext(
@@ -526,7 +495,6 @@ str2entry_fast(const char *rawdn, const Slapi_RDN *srdn, const char *s, int flag
                     &(*a)->a_present_values,
                     svalue,
                     SLAPI_VALUE_FLAG_PASSIN);
-                nvals++;
             }
             if (attributedeletioncsn != NULL) {
                 attr_set_deletion_csn(*a, attributedeletioncsn);
@@ -709,7 +677,7 @@ entry_attrs_add(entry_attrs *ea, const char *atname, int atarrayindex)
     ead->ead_attrarrayindex = atarrayindex;
     ead->ead_attrtypename = atname; /* a reference, not a strdup! */
 
-    avl_insert(&(ea->ea_attrlist), ead, attr_type_node_cmp, avl_dup_error);
+    avl_insert(&(ea->ea_attrlist), (caddr_t)ead, attr_type_node_cmp, avl_dup_error);
 }
 
 /*
@@ -723,7 +691,7 @@ entry_attrs_find(entry_attrs *ea, char *type)
     entry_attr_data *foundead;
 
     tmpead.ead_attrtypename = type;
-    foundead = (entry_attr_data *)avl_find(ea->ea_attrlist, &tmpead,
+    foundead = (entry_attr_data *)avl_find(ea->ea_attrlist, (caddr_t)&tmpead,
                                            attr_type_node_cmp);
     return (NULL != foundead) ? foundead->ead_attrarrayindex : -1;
 }
@@ -887,8 +855,8 @@ str2entry_dupcheck(const char *rawdn, const char *s, int flags, int read_statein
         if (strcasecmp(type, "dn") == 0) {
             if (slapi_entry_get_dn_const(e) != NULL) {
                 char ebuf[BUFSIZ];
-                slapi_log_err(SLAPI_LOG_TRACE, "str2entry_dupcheck"
-                                               "Entry has multiple dns \"%s\" and \"%s\" (second ignored)\n",
+                slapi_log_err(SLAPI_LOG_TRACE, "str2entry_dupcheck",
+                              "Entry has multiple dns \"%s\" and \"%s\" (second ignored)\n",
                               (char *)slapi_entry_get_dn_const(e),
                               escape_string(valuecharptr, ebuf));
                 /* the memory below was not allocated by the slapi_ch_ functions */
@@ -1041,16 +1009,17 @@ str2entry_dupcheck(const char *rawdn, const char *s, int flags, int read_statein
 
         sa = prev_attr; /* For readability */
         value = value_new(NULL, CSN_TYPE_NONE, NULL);
-        if (slapi_attr_is_dn_syntax_attr(&(sa->sa_attr))) {
-            Slapi_DN *sdn = NULL;
-            const char *dn_aval = NULL;
+        slapi_value_set_berval(value, &bvvalue);
+        if (slapi_attr_is_dn_syntax_attr(&(sa->sa_attr)) &&
+            !(flags & SLAPI_STR2ENTRY_USE_OBSOLETE_DNFORMAT)) {
             if (strict) {
                 /* check that the dn is formatted correctly */
                 rc = slapi_dn_syntax_check(NULL, valuecharptr, 1);
                 if (rc) { /* syntax check failed */
-                    slapi_log_err(SLAPI_LOG_ERR, "str2entry_dupcheck"
-                                                 "strict: Invalid DN value: %s: %s\n",
+                    slapi_log_err(SLAPI_LOG_ERR, "str2entry_dupcheck",
+                                  "strict: Invalid DN value: %s: %s\n",
                                   type, valuecharptr);
+                    slapi_value_free(&value);
                     slapi_entry_free(e);
                     e = NULL;
                     if (freeval)
@@ -1058,15 +1027,9 @@ str2entry_dupcheck(const char *rawdn, const char *s, int flags, int read_statein
                     goto free_and_return;
                 }
             }
-            sdn = slapi_sdn_new_dn_byref(bvvalue.bv_val);
-            /* Note: slapi_sdn_get_dn returns the normalized DN
-             * with case-intact. Thus, the length of dn_aval is
-             * slapi_sdn_get_ndn_len(sdn). */
-            dn_aval = slapi_sdn_get_dn(sdn);
-            slapi_value_set(value, (void *)dn_aval, slapi_sdn_get_ndn_len(sdn));
-            slapi_sdn_free(&sdn);
-        } else {
-            slapi_value_set_berval(value, &bvvalue);
+            if (value_dn_normalize_value(value) == 0) {
+                sa->sa_attr.a_flags |= SLAPI_ATTR_FLAG_NORMALIZED_CES;
+            }
         }
         /* the memory below was not allocated by the slapi_ch_ functions */
         if (freeval)
@@ -1419,8 +1382,22 @@ entry2str_internal_size_valueset(const Slapi_Attr *a, const char *attrtype, cons
     return elen;
 }
 
+static int
+entry2str_attr_is_excluded(const char *attrtype, char **exclude_attrs)
+{
+    if (exclude_attrs == NULL || attrtype == NULL) {
+        return 0;
+    }
+    for (char **ex = exclude_attrs; *ex != NULL; ex++) {
+        if (strcasecmp(attrtype, *ex) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static size_t
-entry2str_internal_size_attrlist(const Slapi_Attr *attrlist, int entry2str_ctrl, int attribute_state)
+entry2str_internal_size_attrlist(const Slapi_Attr *attrlist, int entry2str_ctrl, int attribute_state, char **exclude_attrs)
 {
     size_t elen = 0;
     const Slapi_Attr *a;
@@ -1429,6 +1406,10 @@ entry2str_internal_size_attrlist(const Slapi_Attr *attrlist, int entry2str_ctrl,
         if ((entry2str_ctrl & SLAPI_DUMP_NOOPATTRS) &&
             slapi_attr_flag_is_set(a, SLAPI_ATTR_FLAG_OPATTR))
             continue;
+
+        if (entry2str_attr_is_excluded(a->a_type, exclude_attrs)) {
+            continue;
+        }
 
         /* Count the space required for the present and deleted values */
         elen += entry2str_internal_size_valueset(a, a->a_type, &a->a_present_values,
@@ -1502,6 +1483,9 @@ entry2str_internal_put_value(const char *attrtype, const CSN *attrcsn, CSNType a
         strcpy(p, attrtype);
         p += attrtypelen;
         if (attrcsn != NULL) {
+            /* coverity false positive: there is no alloc involved in this case
+             * because p is not NULL */
+            /* coverity[leaked_storage] */
             csn_as_attr_option_string(attrcsntype, attrcsn, p);
             p += attrcsnlen;
         }
@@ -1571,7 +1555,7 @@ is_type_forbidden(const char *type)
 #endif
 
 static void
-entry2str_internal_put_attrlist(const Slapi_Attr *attrlist, int attr_state, int entry2str_ctrl, char **ecur, char **typebuf, size_t *typebuf_len)
+entry2str_internal_put_attrlist(const Slapi_Attr *attrlist, int attr_state, int entry2str_ctrl, char **ecur, char **typebuf, size_t *typebuf_len, char **exclude_attrs)
 {
     const Slapi_Attr *a;
 
@@ -1581,6 +1565,10 @@ entry2str_internal_put_attrlist(const Slapi_Attr *attrlist, int attr_state, int 
         if ((entry2str_ctrl & SLAPI_DUMP_NOOPATTRS) &&
             slapi_attr_flag_is_set(a, SLAPI_ATTR_FLAG_OPATTR))
             continue;
+
+        if (entry2str_attr_is_excluded(a->a_type, exclude_attrs)) {
+            continue;
+        }
 
         /* don't dump uniqueid if not asked */
         if (!(strcasecmp(a->a_type, SLAPI_ATTR_UNIQUEID) == 0 &&
@@ -1616,7 +1604,7 @@ entry2str_internal_put_attrlist(const Slapi_Attr *attrlist, int attr_state, int 
 }
 
 static char *
-entry2str_internal(Slapi_Entry *e, int *len, int entry2str_ctrl)
+entry2str_internal(Slapi_Entry *e, int *len, int entry2str_ctrl, char **exclude_attrs)
 {
     char *ebuf;
     char *ecur;
@@ -1643,12 +1631,12 @@ entry2str_internal(Slapi_Entry *e, int *len, int entry2str_ctrl)
     }
 
     /* Count the space required for the present attributes */
-    elen += entry2str_internal_size_attrlist(e->e_attrs, entry2str_ctrl, ATTRIBUTE_PRESENT);
+    elen += entry2str_internal_size_attrlist(e->e_attrs, entry2str_ctrl, ATTRIBUTE_PRESENT, exclude_attrs);
 
     /* Count the space required for the deleted attributes */
     if (entry2str_ctrl & SLAPI_DUMP_STATEINFO) {
         elen += entry2str_internal_size_attrlist(e->e_deleted_attrs, entry2str_ctrl,
-                                                 ATTRIBUTE_DELETED);
+                                                 ATTRIBUTE_DELETED, exclude_attrs);
     }
 
     elen += 1;
@@ -1661,11 +1649,11 @@ entry2str_internal(Slapi_Entry *e, int *len, int entry2str_ctrl)
     }
 
     /* Put the present attributes */
-    entry2str_internal_put_attrlist(e->e_attrs, ATTRIBUTE_PRESENT, entry2str_ctrl, &ecur, &typebuf, &typebuf_len);
+    entry2str_internal_put_attrlist(e->e_attrs, ATTRIBUTE_PRESENT, entry2str_ctrl, &ecur, &typebuf, &typebuf_len, exclude_attrs);
 
     /* Put the deleted attributes */
     if (entry2str_ctrl & SLAPI_DUMP_STATEINFO) {
-        entry2str_internal_put_attrlist(e->e_deleted_attrs, ATTRIBUTE_DELETED, entry2str_ctrl, &ecur, &typebuf, &typebuf_len);
+        entry2str_internal_put_attrlist(e->e_deleted_attrs, ATTRIBUTE_DELETED, entry2str_ctrl, &ecur, &typebuf, &typebuf_len, exclude_attrs);
     }
 
     *ecur = '\0';
@@ -1686,7 +1674,7 @@ entry2str_internal(Slapi_Entry *e, int *len, int entry2str_ctrl)
 }
 
 static char *
-entry2str_internal_ext(Slapi_Entry *e, int *len, int entry2str_ctrl)
+entry2str_internal_ext(Slapi_Entry *e, int *len, int entry2str_ctrl, char **exclude_attrs)
 {
     if (entry2str_ctrl & SLAPI_DUMP_RDN_ENTRY) /* dump rdn: ... */
     {
@@ -1720,13 +1708,13 @@ entry2str_internal_ext(Slapi_Entry *e, int *len, int entry2str_ctrl)
 
         /* Count the space required for the present attributes */
         elen += entry2str_internal_size_attrlist(e->e_attrs, entry2str_ctrl,
-                                                 ATTRIBUTE_PRESENT);
+                                                 ATTRIBUTE_PRESENT, exclude_attrs);
 
         /* Count the space required for the deleted attributes */
         if (entry2str_ctrl & SLAPI_DUMP_STATEINFO) {
             elen += entry2str_internal_size_attrlist(e->e_deleted_attrs,
                                                      entry2str_ctrl,
-                                                     ATTRIBUTE_DELETED);
+                                                     ATTRIBUTE_DELETED, exclude_attrs);
         }
 
         elen += 1;
@@ -1744,13 +1732,13 @@ entry2str_internal_ext(Slapi_Entry *e, int *len, int entry2str_ctrl)
         /* Put the present attributes */
         entry2str_internal_put_attrlist(e->e_attrs, ATTRIBUTE_PRESENT,
                                         entry2str_ctrl, &ecur,
-                                        &typebuf, &typebuf_len);
+                                        &typebuf, &typebuf_len, exclude_attrs);
 
         /* Put the deleted attributes */
         if (entry2str_ctrl & SLAPI_DUMP_STATEINFO) {
             entry2str_internal_put_attrlist(e->e_deleted_attrs,
                                             ATTRIBUTE_DELETED, entry2str_ctrl,
-                                            &ecur, &typebuf, &typebuf_len);
+                                            &ecur, &typebuf, &typebuf_len, exclude_attrs);
         }
 
         *ecur = '\0';
@@ -1771,7 +1759,7 @@ entry2str_internal_ext(Slapi_Entry *e, int *len, int entry2str_ctrl)
         return ebuf;
     } else /* dump "dn: ..." */
     {
-        return entry2str_internal(e, len, entry2str_ctrl);
+        return entry2str_internal(e, len, entry2str_ctrl, exclude_attrs);
     }
 }
 
@@ -1781,7 +1769,7 @@ entry2str_internal_ext(Slapi_Entry *e, int *len, int entry2str_ctrl)
 char *
 slapi_entry2str(Slapi_Entry *e, int *len)
 {
-    return entry2str_internal(e, len, 0);
+    return entry2str_internal(e, len, 0, NULL);
 }
 
 /*
@@ -1790,7 +1778,7 @@ slapi_entry2str(Slapi_Entry *e, int *len)
 char *
 slapi_entry2str_dump_uniqueid(Slapi_Entry *e, int *len)
 {
-    return entry2str_internal(e, len, SLAPI_DUMP_UNIQUEID);
+    return entry2str_internal(e, len, SLAPI_DUMP_UNIQUEID, NULL);
 }
 
 /*
@@ -1799,7 +1787,18 @@ slapi_entry2str_dump_uniqueid(Slapi_Entry *e, int *len)
 char *
 slapi_entry2str_no_opattrs(Slapi_Entry *e, int *len)
 {
-    return entry2str_internal(e, len, SLAPI_DUMP_NOOPATTRS);
+    return entry2str_internal(e, len, SLAPI_DUMP_NOOPATTRS, NULL);
+}
+
+/*
+ * This function converts an entry to the entry string starting with "dn: ..."
+ * Attributes listed in exclude_attrs are omitted from the output. The
+ * entry itself is not modified.
+ */
+char *
+slapi_entry2str_exclude_attrs(Slapi_Entry *e, int *len, char **exclude_attrs)
+{
+    return entry2str_internal(e, len, 0, exclude_attrs);
 }
 
 /*
@@ -1810,7 +1809,7 @@ slapi_entry2str_no_opattrs(Slapi_Entry *e, int *len)
 char *
 slapi_entry2str_with_options(Slapi_Entry *e, int *len, int options)
 {
-    return entry2str_internal_ext(e, len, options);
+    return entry2str_internal_ext(e, len, options, NULL);
 }
 
 static int entry_type = -1; /* The type number assigned by the Factory for 'Entry' */
@@ -3884,9 +3883,7 @@ send_referrals_from_entry(Slapi_PBlock *pb, Slapi_Entry *referral)
     slapi_entry_attr_find(referral, "ref", &attr);
     if (attr != NULL) {
         slapi_attr_get_numvalues(attr, &numValues);
-        if (numValues > 0) {
-            url = (struct berval **)slapi_ch_malloc((numValues + 1) * sizeof(struct berval *));
-        }
+        url = (struct berval **)slapi_ch_malloc((numValues + 1) * sizeof(struct berval *));
         for (i = slapi_attr_first_value(attr, &val); i != -1;
              i = slapi_attr_next_value(attr, i, &val)) {
             url[i] = (struct berval *)slapi_value_get_berval(val);

@@ -1,6 +1,6 @@
 import cockpit from "cockpit";
 import React from "react";
-import { log_cmd, searchFilter, listsEqual } from "./lib/tools.jsx";
+import { log_cmd, searchFilter, listsEqual, getApiErrorMessage } from "./lib/tools.jsx";
 import {
     ObjectClassesTable,
     AttributesTable,
@@ -108,7 +108,7 @@ export class Schema extends React.Component {
         };
 
         // Substring Matching Rule
-        this.handleSubstringMRToggle = isSubstringMROpen => {
+        this.handleSubstringMRToggle = (_event, isSubstringMROpen) => {
             this.setState({
                 isSubstringMROpen
             });
@@ -136,7 +136,7 @@ export class Schema extends React.Component {
         };
 
         // Order Matching Rule
-        this.handleOrderMRToggle = isOrderMROpen => {
+        this.handleOrderMRToggle = (_event, isOrderMROpen) => {
             this.setState({
                 isOrderMROpen
             });
@@ -164,7 +164,7 @@ export class Schema extends React.Component {
         };
 
         // Equaliry Matching Rule
-        this.handleEqualityMRToggle = isEqualityMROpen => {
+        this.handleEqualityMRToggle = (_event, isEqualityMROpen) => {
             this.setState({
                 isEqualityMROpen
             });
@@ -192,7 +192,7 @@ export class Schema extends React.Component {
         };
 
         // Alias Name
-        this.handleAliasNameToggle = isAliasNameOpen => {
+        this.handleAliasNameToggle = (_event, isAliasNameOpen) => {
             this.setState({
                 isAliasNameOpen
             });
@@ -206,23 +206,12 @@ export class Schema extends React.Component {
         };
         this.handleAliasNameSelect = (event, selection) => {
             const e = { target: { id: 'dummy', value: "", type: 'input' } };
-            if (this.state.atAlias.includes(selection)) {
-                this.setState(
-                    prevState => ({
-                        atAlias: prevState.atAlias.filter((item) => item !== selection),
-                        isAliasNameOpen: false
-                    }), () => { this.onAttrChange(e) }
-                );
-            } else {
-                this.setState(
-                    prevState => ({
-                        atAlias: [...prevState.atAlias, selection],
-                        isAliasNameOpen: false
-                    }), () => { this.onAttrChange(e) }
-                );
-            }
+            this.setState({
+                atAlias: Array.isArray(selection) ? selection : [],
+                isAliasNameOpen: false
+            }, () => { this.onAttrChange(e) });
         };
-        this.handleAliasNameCreateOption = newValue => {
+        this.handleAliasNameCreateOption = (_event, newValue) => {
             if (!this.state.atAliasOptions.includes(newValue)) {
                 this.setState({
                     atAliasOptions: [...this.state.atAliasOptions, { value: newValue }],
@@ -232,7 +221,7 @@ export class Schema extends React.Component {
         };
 
         // Parent Attribute
-        this.handleParentAttrToggle = isParentAttrOpen => {
+        this.handleParentAttrToggle = (_event, isParentAttrOpen) => {
             this.setState({
                 isParentAttrOpen
             });
@@ -262,7 +251,7 @@ export class Schema extends React.Component {
         };
 
         // Required Attributes
-        this.handleRequiredAttrsToggle = isRequiredAttrsOpen => {
+        this.handleRequiredAttrsToggle = (_event, isRequiredAttrsOpen) => {
             this.setState({
                 isRequiredAttrsOpen
             });
@@ -275,21 +264,10 @@ export class Schema extends React.Component {
         };
         this.handleRequiredAttrsSelect = (event, selection) => {
             const e = { target: { id: 'dummy', value: "", type: 'input' } };
-            if (this.state.ocMust.includes(selection)) {
-                this.setState(
-                    (prevState) => ({
-                        ocMust: prevState.ocMust.filter((item) => item !== selection),
-                        isRequiredAttrsOpen: false
-                    }), () => { this.onOCChange(e) }
-                );
-            } else {
-                this.setState(
-                    prevState => ({
-                        ocMust: [...prevState.ocMust, selection],
-                        isRequiredAttrsOpen: false
-                    }), () => { this.onOCChange(e) }
-                );
-            }
+            this.setState({
+                ocMust: Array.isArray(selection) ? selection : [],
+                isRequiredAttrsOpen: false
+            }, () => { this.onOCChange(e) });
         };
         this.handleRequiredAttrsCreateOption = newValue => {
             if (!this.state.ocMustOptions.includes(newValue)) {
@@ -301,7 +279,7 @@ export class Schema extends React.Component {
         };
 
         // Allowed Attributes
-        this.handleAllowedAttrsToggle = isAllowedAttrsOpen => {
+        this.handleAllowedAttrsToggle = (_event, isAllowedAttrsOpen) => {
             this.setState({
                 isAllowedAttrsOpen
             });
@@ -314,21 +292,10 @@ export class Schema extends React.Component {
         };
         this.handleAllowedAttrsSelect = (event, selection) => {
             const e = { target: { id: 'dummy', value: "", type: 'input' } };
-            if (this.state.ocMay.includes(selection)) {
-                this.setState(
-                    prevState => ({
-                        ocMay: prevState.ocMay.filter((item) => item !== selection),
-                        isAllowedAttrsOpen: false
-                    }), () => { this.onOCChange(e) }
-                );
-            } else {
-                this.setState(
-                    prevState => ({
-                        ocMay: [...prevState.ocMay, selection],
-                        isAllowedAttrsOpen: false
-                    }), () => { this.onOCChange(e) }
-                );
-            }
+            this.setState({
+                ocMay: Array.isArray(selection) ? selection : [],
+                isAllowedAttrsOpen: false
+            }, () => { this.onOCChange(e) });
         };
         this.handleAllowedAttrsCreateOption = newValue => {
             if (!this.state.ocMayOptions.includes(newValue)) {
@@ -418,7 +385,7 @@ export class Schema extends React.Component {
         ];
         log_cmd("loadSyntaxes", "Get syntaxes for attributetypes", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const myObject = JSON.parse(content);
                     this.setState({
@@ -428,8 +395,8 @@ export class Schema extends React.Component {
                 })
                 .fail(err => {
                     if (err !== 0) {
-                        const errMsg = JSON.parse(err);
-                        console.log("loadSyntaxes failed: ", errMsg.desc);
+                        const errMsg = getApiErrorMessage(err);
+                        console.log("loadSyntaxes failed: ", errMsg);
                     }
                 });
     }
@@ -440,11 +407,12 @@ export class Schema extends React.Component {
             "-j",
             "ldapi://%2fvar%2frun%2fslapd-" + this.props.serverId + ".socket",
             "schema",
-            "list"
+            "list",
+            "--include-oc-sup"
         ];
         log_cmd("loadSchemaData", "Get schema objects in one batch", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const myObject = JSON.parse(content);
                     const attrs = [];
@@ -515,8 +483,8 @@ export class Schema extends React.Component {
                 })
                 .fail(err => {
                     if (err !== 0) {
-                        const errMsg = JSON.parse(err);
-                        console.log("loadSchemaData failed: ", errMsg.desc);
+                        const errMsg = getApiErrorMessage(err);
+                        console.log("loadSchemaData failed: ", errMsg);
                     }
                     if (initialLoading) {
                         this.toggleLoading("allSchema");
@@ -568,13 +536,14 @@ export class Schema extends React.Component {
                 "schema",
                 "objectclasses",
                 "query",
-                name
+                name,
+                "--include-sup"
             ];
 
             log_cmd("openObjectclassModal", "Fetch ObjectClass data from schema", cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
@@ -684,7 +653,7 @@ export class Schema extends React.Component {
         log_cmd("deleteObjectclass", "Delete ObjectClass from schema", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -694,10 +663,10 @@ export class Schema extends React.Component {
                     this.closeConfirmOCDelete();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during ObjectClass removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during ObjectClass removal operation - $0"), errMsg)
                     );
                     this.loadSchemaData();
                     this.closeConfirmOCDelete();
@@ -757,25 +726,25 @@ export class Schema extends React.Component {
             log_cmd("cmdOperationObjectclass", `Do the ${action} operation on ObjectClass`, cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
                         console.info("cmdOperationObjectclass", "Result", content);
                         this.props.addNotification(
                             "success",
-                            cockpit.format(_("ObjectClass $0 - $1 operation was successfull"), ocName, action)
+                            cockpit.format(_("ObjectClass $0 - $1 operation was successful"), ocName, action)
                         );
                         this.loadSchemaData();
                         this.closeObjectclassModal();
                         this.toggleLoading("ocModal");
                     })
                     .fail(err => {
-                        let errMsg = JSON.parse(err);
+                        let errMsg = getApiErrorMessage(err);
                         if ('info' in errMsg) {
-                            errMsg = errMsg.desc + " " + errMsg.info;
+                            errMsg = errMsg + " " + errMsg.info;
                         } else {
-                            errMsg = errMsg.desc;
+                            errMsg = errMsg;
                         }
                         this.props.addNotification(
                             "error",
@@ -838,7 +807,7 @@ export class Schema extends React.Component {
             log_cmd("openAttributeModal", "Fetch Attribute data from schema", cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
@@ -978,7 +947,7 @@ export class Schema extends React.Component {
         log_cmd("deleteAttribute", "Delete Attribute from schema", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -988,10 +957,10 @@ export class Schema extends React.Component {
                     this.closeConfirmAttrDelete();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during Attribute removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during Attribute removal operation - $0"), errMsg)
                     );
                     this.loadSchemaData();
                     this.closeConfirmAttrDelete();
@@ -1074,25 +1043,25 @@ export class Schema extends React.Component {
         log_cmd("cmdOperationAttribute", `Do the add operation on Attribute`, cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
                     console.info("cmdOperationAttribute", "Result", content);
                     this.props.addNotification(
                         "success",
-                        cockpit.format(_("Attribute $0 - add operation was successfull"), atName)
+                        cockpit.format(_("Attribute $0 - add operation was successful"), atName)
                     );
                     this.loadSchemaData();
                     this.closeAttributeModal();
                     this.toggleLoading("atModal");
                 })
                 .fail(err => {
-                    let errMsg = JSON.parse(err);
+                    let errMsg = getApiErrorMessage(err);
                     if ('info' in errMsg) {
-                        errMsg = errMsg.desc + " " + errMsg.info;
+                        errMsg = errMsg + " " + errMsg.info;
                     } else {
-                        errMsg = errMsg.desc;
+                        errMsg = errMsg;
                     }
                     this.props.addNotification(
                         "error",
@@ -1151,13 +1120,13 @@ export class Schema extends React.Component {
             subMR = "";
         }
 
-        if (eqMR !== this.state._atEqMr) {
+        if (eqMR !== "") {
             cmd = [...cmd, "--equality", eqMR];
         }
-        if (subMR !== this.state._atSubMr) {
+        if (subMR !== "") {
             cmd = [...cmd, "--substr", subMR];
         }
-        if (orderMR !== this.state._atOrder) {
+        if (orderMR !== "") {
             cmd = [...cmd, "--ordering", orderMR];
         }
         if (atMultivalued) {
@@ -1170,13 +1139,13 @@ export class Schema extends React.Component {
         } else {
             cmd = [...cmd, "--user-mod"];
         }
-        if (atOID !== this.state._atOID) {
+        if (atOID !== "") {
             cmd = [...cmd, "--oid", atOID];
         }
-        if (atUsage !== this.state._atUsage) {
+        if (atUsage !== "") {
             cmd = [...cmd, "--usage", atUsage];
         }
-        if (atDesc !== this.state._atDesc) {
+        if (atDesc !== "") {
             cmd = [...cmd, "--desc", atDesc];
         }
 
@@ -1185,25 +1154,25 @@ export class Schema extends React.Component {
         log_cmd("cmdOperationAttribute", `Do the replace operation on Attribute`, cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
                     console.info("cmdOperationAttribute", "Result", content);
                     this.props.addNotification(
                         "success",
-                        cockpit.format(_("Attribute $0 - replace operation was successfull"), atName)
+                        cockpit.format(_("Attribute $0 - replace operation was successful"), atName)
                     );
                     this.loadSchemaData();
                     this.closeAttributeModal();
                     this.toggleLoading("atModal");
                 })
                 .fail(err => {
-                    let errMsg = JSON.parse(err);
+                    let errMsg = getApiErrorMessage(err);
                     if ('info' in errMsg) {
-                        errMsg = errMsg.desc + " " + errMsg.info;
+                        errMsg = errMsg + " " + errMsg.info;
                     } else {
-                        errMsg = errMsg.desc;
+                        errMsg = errMsg;
                     }
                     this.props.addNotification(
                         "error",
@@ -1402,7 +1371,7 @@ export class Schema extends React.Component {
                                     id="ocUserDefined"
                                     isChecked={this.state.ocUserDefined}
                                     title={_("Show only the objectclasses that are defined by a user and have the X-ORIGIN set to 'user defined'")}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         this.onFieldChange(e);
                                     }}
                                     label={_("Only Show Non-standard/Custom Schema")}
@@ -1418,6 +1387,7 @@ export class Schema extends React.Component {
                                 <Button
                                     variant="primary"
                                     onClick={this.handleShowAddObjectclassModal}
+                                    className="ds-margin-top"
                                 >
                                     {_("Add ObjectClass")}
                                 </Button>
@@ -1463,7 +1433,7 @@ export class Schema extends React.Component {
                                     id="atUserDefined"
                                     isChecked={this.state.atUserDefined}
                                     title={_("Show only the attributes that are defined by a user, and have the X-ORIGIN set to 'user defined'")}
-                                    onChange={(checked, e) => {
+                                    onChange={(e, checked) => {
                                         this.onFieldChange(e);
                                     }}
                                     label={_("Only Show Non-standard/Custom Schema")}
@@ -1480,6 +1450,7 @@ export class Schema extends React.Component {
                                 <Button
                                     variant="primary"
                                     onClick={this.handleShowAddAttributeModal}
+                                    className="ds-margin-top"
                                 >
                                     {_("Add Attribute")}
                                 </Button>

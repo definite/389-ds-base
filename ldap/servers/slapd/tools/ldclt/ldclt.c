@@ -189,7 +189,7 @@ copyVersObject(
     /*
    * Initiates the variables
    */
-    for (size_t i = 0; i + VAR_MIN < VAR_MAX; i++)
+    for (size_t i = 0; i + VAR_MIN < VAR_MAX + 1; i++) /*25-08-07*/
         if (srcobj->var[i] == NULL)
             newobj->var[i] = NULL;
         else
@@ -1180,6 +1180,7 @@ basicInit(void)
          * Find the attribute name
          */
         for (i = 0; (i < strlen(mctx.attrpl)) && (mctx.attrpl[i] != ':'); i++);
+        free(mctx.attrplName);
         mctx.attrplName = (char *)calloc(1, i + 1);
         if (mctx.attrplName == NULL) {
             printf("Error: unable to allocate memory for attrplName\n");
@@ -2320,7 +2321,7 @@ main(
    */
     mctx.object.attribsNb = 0;              /*JLS 23-03-01*/
     mctx.object.rdn = NULL;                 /*JLS 23-03-01*/
-    for (size_t i = 0; i + VAR_MIN < VAR_MAX; i++)
+    for (size_t i = 0; i + VAR_MIN < VAR_MAX + 1; i++) /*25-08-07*/
         mctx.object.var[i] = NULL;          /*JLS 23-03-01*/
 
     /*

@@ -1,23 +1,23 @@
 import cockpit from "cockpit";
 import React from "react";
 import {
-    Button,
-    Checkbox,
-    Form,
-    FormHelperText,
-    FormSelect,
-    FormSelectOption,
-    Grid,
-    GridItem,
-    Select,
-    SelectVariant,
-    SelectOption,
-    NumberInput,
-    ValidatedOptions,
-} from "@patternfly/react-core";
+	Button,
+	Checkbox,
+	Form,
+	FormHelperText,
+	FormSelect,
+	FormSelectOption,
+	HelperText,
+	HelperTextItem,
+	Grid,
+	GridItem,
+	NumberInput,
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
+import { ExclamationCircleIcon } from "@patternfly/react-icons";
 import PropTypes from "prop-types";
 import PluginBasicConfig from "./pluginBasicConfig.jsx";
-import { log_cmd, valid_dn, listsEqual } from "../tools.jsx";
+import { log_cmd, valid_dn, listsEqual, getApiErrorMessage } from "../tools.jsx";
 
 const _ = cockpit.gettext;
 
@@ -64,7 +64,11 @@ class RetroChangelog extends React.Component {
 
         this.maxValue = 20000000;
         this.minValue = 0;
+
         this.handleMinusConfig = () => {
+            if (this.state.maxAge === this.minValue) {
+                return;
+            }
             this.setState({
                 maxAge: Number(this.state.maxAge) - 1
             }, () => { this.validate() });
@@ -76,6 +80,9 @@ class RetroChangelog extends React.Component {
             }, () => { this.validate() });
         };
         this.handlePlusConfig = () => {
+            if (this.state.maxAge === this.maxValue) {
+                return;
+            }
             this.setState({
                 maxAge: Number(this.state.maxAge) + 1
             }, () => { this.validate() });
@@ -99,23 +106,11 @@ class RetroChangelog extends React.Component {
         };
 
         this.handleExcludeAttrSelect = (event, selection) => {
-            if (this.state.excludeAttrs.includes(selection)) {
-                this.setState(
-                    (prevState) => ({
-                        excludeAttrs: prevState.excludeAttrs.filter((item) => item !== selection),
-                        isExcludeAttrOpen: false
-                    }), () => { this.validate() }
-                );
-            } else {
-                this.setState(
-                    (prevState) => ({
-                        excludeAttrs: [...prevState.excludeAttrs, selection],
-                        isExcludeAttrOpen: false
-                    }), () => { this.validate() }
-                );
-            }
+            this.setState({
+                excludeAttrs: Array.isArray(selection) ? selection : [],
+            }, () => { this.validate() });
         };
-        this.handleExcludeAttrToggle = isExcludeAttrOpen => {
+        this.handleExcludeAttrToggle = (_event, isExcludeAttrOpen) => {
             this.setState({
                 isExcludeAttrOpen
             });
@@ -128,23 +123,11 @@ class RetroChangelog extends React.Component {
         };
 
         this.handleExcludeSuffixSelect = (event, selection) => {
-            if (this.state.excludeSuffix.includes(selection)) {
-                this.setState(
-                    (prevState) => ({
-                        excludeSuffix: prevState.excludeSuffix.filter((item) => item !== selection),
-                        isExcludeSuffixOpen: false
-                    }), () => { this.validate() }
-                );
-            } else {
-                this.setState(
-                    (prevState) => ({
-                        excludeSuffix: [...prevState.excludeSuffix, selection],
-                        isExcludeSuffixOpen: false
-                    }), () => { this.validate() }
-                );
-            }
+            this.setState({
+                excludeSuffix: Array.isArray(selection) ? selection : [],
+            }, () => { this.validate() });
         };
-        this.handleExcludeSuffixToggle = isExcludeSuffixOpen => {
+        this.handleExcludeSuffixToggle = (_event, isExcludeSuffixOpen) => {
             this.setState({
                 isExcludeSuffixOpen
             }, () => { this.validate() });
@@ -232,9 +215,21 @@ class RetroChangelog extends React.Component {
             const pluginRow = this.props.rows.find(row => row.cn[0] === "Retro Changelog Plugin");
             let maxAge = 0;
             let maxAgeUnit = "w";
+
             if (pluginRow["nsslapd-changelogmaxage"] !== undefined) {
-                maxAge = Number(pluginRow["nsslapd-changelogmaxage"][0].slice(0, -1)) === 0 ? 0 : Number(pluginRow["nsslapd-changelogmaxage"][0].slice(0, -1));
-                maxAgeUnit = pluginRow["nsslapd-changelogmaxage"][0] !== "" ? pluginRow["nsslapd-changelogmaxage"][0].slice(-1).toLowerCase() : "w";
+                let val = pluginRow["nsslapd-changelogmaxage"][0];
+                if (val !== "0") {
+                    const unit = val[val.length - 1];
+                    if (unit >= '0' && unit <= '9') {
+                        // Missing duration unit, assume seconds
+                        val = val + "s";
+                    }
+                    maxAge = Number(val.slice(0, -1)) === 0 ? 0 : Number(val.slice(0, -1));
+                    maxAgeUnit = val.slice(-1).toLowerCase();
+                } else {
+                    maxAge = 0;
+                    maxAgeUnit = "s";
+                }
             }
             this.setState({
                 isReplicated: !(
@@ -276,7 +271,7 @@ class RetroChangelog extends React.Component {
     }
 
     handleSavePlugin () {
-        const maxAge = this.state.maxAge.toString() + this.state.maxAgeUnit;
+
         let cmd = [
             "dsconf",
             "-j",
@@ -286,11 +281,15 @@ class RetroChangelog extends React.Component {
             "set",
             "--is-replicated",
             this.state.isReplicated ? "TRUE" : "FALSE",
-            "--max-age",
-            maxAge || "delete",
             "--trim-interval",
             this.state.trimInterval.toString() || "300"
         ];
+        const maxAge = this.state.maxAge.toString();
+        if (maxAge === "0") {
+            cmd = [...cmd, "--max-age=0"];
+        } else {
+            cmd = [...cmd, "--max-age", maxAge + this.state.maxAgeUnit];
+        }
         if (this.state._excludeSuffix !== this.state.excludeSuffix) {
             cmd = [...cmd, "--exclude-suffix"];
             if (this.state.excludeSuffix.length !== 0) {
@@ -317,7 +316,7 @@ class RetroChangelog extends React.Component {
 
         log_cmd('handleSavePlugin', 'update retrocl', cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.addNotification(
                         "success",
@@ -329,10 +328,10 @@ class RetroChangelog extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to update Retro Changelog Plugin - $0"), errMsg.desc)
+                        cockpit.format(_("Failed to update Retro Changelog Plugin - $0"), errMsg)
                     );
                     this.props.pluginListHandler();
                     this.setState({
@@ -379,37 +378,34 @@ class RetroChangelog extends React.Component {
                                 {_("Exclude Suffix")}
                             </GridItem>
                             <GridItem span={5}>
-                                <Select
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type a suffix"
-                                    onToggle={this.handleExcludeSuffixToggle}
+                                <TypeaheadSelect
+                                    selected={excludeSuffix}
                                     onSelect={this.handleExcludeSuffixSelect}
                                     onClear={this.handleExcludeSuffixClear}
-                                    selections={excludeSuffix}
+                                    options={[""]}
                                     isOpen={this.state.isExcludeSuffixOpen}
-                                    aria-labelledby="typeAhead-config-exclude-suffix"
-                                    placeholderText={_("Type a suffix...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                    isCreatable
+                                    onToggle={this.handleExcludeSuffixToggle}
+                                    placeholder={_("Type a suffix...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type a suffix"
+                                    validated={error.excludeSuffix ? "error" : "default"}
+                                    isMulti={true}
+                                    isCreatable={true}
                                     onCreateOption={this.handleOnExcludeSuffixCreateOption}
-                                    validated={error.excludeSuffix ? ValidatedOptions.error : ValidatedOptions.default}
-                                >
-                                    {[""].map((attr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={attr}
-                                        />
-                                    ))}
-                                </Select>
-                                <FormHelperText isError isHidden={!error.excludeSuffix}>
-                                    {_("Values must be valid DN !")}
+                                />
+                                <FormHelperText>
+                                    <HelperText>
+                                        <HelperTextItem variant={error.excludeSuffix ? "error" : "default"} {...(error.excludeSuffix && { icon: <ExclamationCircleIcon /> })}>
+                                            {error.excludeSuffix ? _("Values must be valid DN's") : ""}
+                                        </HelperTextItem>
+                                    </HelperText>
                                 </FormHelperText>
                             </GridItem>
                             <GridItem className="ds-left-margin" span={2}>
                                 <Checkbox
                                     id="isReplicated"
                                     isChecked={isReplicated}
-                                    onChange={(checked, e) => { this.handleFieldChange(e) }}
+                                    onChange={(e, checked) => { this.handleFieldChange(e) }}
                                     title={_("Sets a flag to indicate on a change in the changelog whether the change is newly made on that server or whether it was replicated over from another server (isReplicated)")}
                                     label={_("Is Replicated")}
                                 />
@@ -420,26 +416,19 @@ class RetroChangelog extends React.Component {
                                 {_("Exclude attribute")}
                             </GridItem>
                             <GridItem span={9}>
-                                <Select
-                                    variant={SelectVariant.typeaheadMulti}
-                                    typeAheadAriaLabel="Type an attribute"
-                                    onToggle={this.handleExcludeAttrToggle}
+                                <TypeaheadSelect
+                                    selected={excludeAttrs}
                                     onSelect={this.handleExcludeAttrSelect}
                                     onClear={this.handleExcludeAttrClear}
-                                    selections={excludeAttrs}
+                                    options={this.props.attributes}
                                     isOpen={this.state.isExcludeAttrOpen}
-                                    aria-labelledby="typeAhead-config-exclude-attr"
-                                    placeholderText={_("Type an attribute...")}
-                                    noResultsFoundText={_("There are no matching entries")}
-                                    validated={error.excludeAttrs ? ValidatedOptions.error : ValidatedOptions.default}
-                                >
-                                    {this.props.attributes.map((attr, index) => (
-                                        <SelectOption
-                                            key={index}
-                                            value={attr}
-                                        />
-                                    ))}
-                                </Select>
+                                    onToggle={this.handleExcludeAttrToggle}
+                                    placeholder={_("Type an attribute...")}
+                                    noResultsText={_("There are no matching entries")}
+                                    ariaLabel="Type an attribute"
+                                    validated={error.excludeAttrs ? "error" : "default"}
+                                    isMulti={true}
+                                />
                             </GridItem>
                         </Grid>
                         <Grid title={_("Specifies the maximum age of any entry in the changelog before it is trimmed from the database (nsslapd-changelogmaxage)")}>
@@ -449,7 +438,7 @@ class RetroChangelog extends React.Component {
                             <GridItem span={2}>
                                 <NumberInput
                                     value={maxAge}
-                                    min={0}
+                                    min={this.minValue}
                                     max={this.maxValue}
                                     onMinus={this.handleMinusConfig}
                                     onChange={this.handleMaxAgeChange}
@@ -461,12 +450,11 @@ class RetroChangelog extends React.Component {
                                     widthChars={8}
                                 />
                             </GridItem>
-                            <GridItem span={2}>
+                            <GridItem offset={5} span={2}>
                                 <FormSelect
-                                    className="ds-margin-left"
                                     id="maxAgeUnit"
                                     value={maxAgeUnit}
-                                    onChange={(value, event) => {
+                                    onChange={(event, value) => {
                                         this.handleFieldChange(event);
                                     }}
                                     aria-label="FormSelect Input"
@@ -476,6 +464,7 @@ class RetroChangelog extends React.Component {
                                     <FormSelectOption key="2" value="d" label={_("Days")} />
                                     <FormSelectOption key="3" value="h" label={_("Hours")} />
                                     <FormSelectOption key="4" value="m" label={_("Minutes")} />
+                                    <FormSelectOption key="5" value="s" label={_("Seconds")} />
                                 </FormSelect>
                             </GridItem>
                         </Grid>

@@ -1,36 +1,30 @@
 import cockpit from "cockpit";
 import React from "react";
-import { log_cmd, valid_dn, isValidIpAddress } from "../tools.jsx";
+import { log_cmd, valid_dn, isValidIpAddress, isValidIpAddressOrCIDR, is_port_in_use, getApiErrorMessage } from "../tools.jsx";
 import {
-    Button,
-    Checkbox,
-    Form,
-    FormHelperText,
-    FormSelect,
-    FormSelectOption,
-    Grid,
-    GridItem,
-    HelperText,
-    HelperTextItem,
-    Select,
-    SelectOption,
-    SelectVariant,
-    Spinner,
-    Tab,
-    Tabs,
-    TabTitleText,
-    NumberInput,
-    TextInput,
-    Text,
-    TextContent,
-    TextVariants,
-    ValidatedOptions,
-} from "@patternfly/react-core";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faSyncAlt
-} from '@fortawesome/free-solid-svg-icons';
-import '@fortawesome/fontawesome-svg-core/styles.css';
+	Button,
+	Checkbox,
+	Form,
+	FormHelperText,
+	FormSelect,
+	FormSelectOption,
+	Grid,
+	GridItem,
+	HelperText,
+	HelperTextItem,
+	Spinner,
+	Tab,
+	Tabs,
+	TabTitleText,
+	NumberInput,
+	TextInput,
+	Text,
+	TextContent,
+	TextVariants,
+	ValidatedOptions
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
+import { SyncAltIcon } from '@patternfly/react-icons';
 import PropTypes from "prop-types";
 
 const general_attrs = [
@@ -109,7 +103,7 @@ export class ServerSettings extends React.Component {
             invalidIP: false,
         };
 
-        this.handleOnHaproxyIPsToggle = isHaproxyIPsOpen => {
+        this.handleOnHaproxyIPsToggle = (_event, isHaproxyIPsOpen) => {
             this.setState({
                 isHaproxyIPsOpen,
                 invalidIP: false,
@@ -117,22 +111,11 @@ export class ServerSettings extends React.Component {
         };
         this.handleOnHaproxyIPsSelect = (event, selection, nav_tab) => {
             const id = 'nsslapd-haproxy-trusted-ip';
-            const { haproxyIPs } = this.state;
-            // The first if-block is when removing an item from the list
-            if (haproxyIPs.includes(selection)) {
-                this.setState(
-                    prevState => ({
-                        haproxyIPs: prevState.haproxyIPs.filter(item => item !== selection),
-                        isHaproxyIPsOpen: false
-                    }), () => { this.validateSaveBtn(nav_tab, id, haproxyIPs.filter(item => item !== selection)) });
-            // The second if-block is when adding an item to the list
-            } else {
-                this.setState(
-                    prevState => ({
-                        haproxyIPs: [...prevState.haproxyIPs, selection],
-                        isHaproxyIPsOpen: false,
-                    }), () => { this.validateSaveBtn(nav_tab, id, [...haproxyIPs, selection]) });
-            }
+            const newHaproxyIPs = Array.isArray(selection) ? selection : [];
+            this.setState({
+                haproxyIPs: newHaproxyIPs,
+                isHaproxyIPsOpen: false,
+            }, () => { this.validateSaveBtn(nav_tab, id, newHaproxyIPs) });
         };
 
         this.handleOnHaproxyIPsClear = (event, nav_tab) => {
@@ -162,6 +145,8 @@ export class ServerSettings extends React.Component {
         };
 
         this.options = [
+            { value: 'PBKDF2-SHA512', label: 'PBKDF2-SHA512', disabled: false },
+            { value: 'PBKDF2-SHA256', label: 'PBKDF2-SHA256', disabled: false },
             { value: 'PBKDF2_SHA256', label: 'PBKDF2_SHA256', disabled: false },
             { value: 'SSHA512', label: 'SSHA512', disabled: false },
             { value: 'SSHA384', label: 'SSHA384', disabled: false },
@@ -178,6 +163,7 @@ export class ServerSettings extends React.Component {
         ];
 
         this.validatePaths = this.validatePaths.bind(this);
+        this.validateAllTabs = this.validateAllTabs.bind(this);
         this.handleChange = this.handleChange.bind(this);
         this.loadConfig = this.loadConfig.bind(this);
         this.handleSaveConfig = this.handleSaveConfig.bind(this);
@@ -188,11 +174,15 @@ export class ServerSettings extends React.Component {
         this.reloadDiskMonitoring = this.reloadDiskMonitoring.bind(this);
         this.handleSaveAdvanced = this.handleSaveAdvanced.bind(this);
         this.reloadAdvanced = this.reloadAdvanced.bind(this);
+        this.validateSaveBtn = this.validateSaveBtn.bind(this);
+        this.validatePortOnBlur = this.validatePortOnBlur.bind(this);
+
         this.onMinusConfig = (id, nav_tab) => {
             this.setState({
                 [id]: Number(this.state[id]) - 1
             }, () => { this.validateSaveBtn(nav_tab, id, Number(this.state[id])) });
-        };
+        }
+
         this.onConfigChange = (event, id, min, max, nav_tab) => {
             let maxValue = this.maxValue;
             if (max !== 0) {
@@ -202,14 +192,14 @@ export class ServerSettings extends React.Component {
             newValue = newValue > maxValue ? maxValue : newValue < min ? min : newValue;
             this.setState({
                 [id]: newValue
-            }, () => { this.validateSaveBtn(nav_tab, id, newValue) });
-        };
+            }, () => { this.validateSaveBtn(nav_tab, id, Number(this.state[id])) });
+        }
+
         this.onPlusConfig = (id, nav_tab) => {
             this.setState({
                 [id]: Number(this.state[id]) + 1
             }, () => { this.validateSaveBtn(nav_tab, id, Number(this.state[id])) });
-        };
-        this.validateSaveBtn = this.validateSaveBtn.bind(this);
+        }
     }
 
     componentDidMount() {
@@ -217,6 +207,7 @@ export class ServerSettings extends React.Component {
         if (!this.state.loaded) {
             this.loadConfig();
         } else {
+            this.validateAllTabs();
             this.props.enableTree();
         }
     }
@@ -232,7 +223,7 @@ export class ServerSettings extends React.Component {
         for (const attr of path_attrs) {
             const cmd = `[ -d "${this.state[attr]}" ]`;
             cockpit
-                    .script(cmd, [], { superuser: true, err: "message" })
+                    .script(cmd, [], { superuser: "require", err: "message" })
                     .done(output => {
                         errObj[attr] = false;
                         this.setState({
@@ -251,7 +242,7 @@ export class ServerSettings extends React.Component {
         }
     }
 
-    validateSaveBtn(nav_tab, attr, value) {
+async validateSaveBtn(nav_tab, attr, value) {
         let disableSaveBtn = true;
         let disableBtnName = "";
         let config_attrs = [];
@@ -339,9 +330,10 @@ export class ServerSettings extends React.Component {
             }
         } else if (nav_tab === "adv") {
             // Handle special cases for anon limit dn
-            if (attr === 'nsslapd-anonlimitsdn' && !valid_dn(value)) {
+            if (attr === 'nsslapd-anonlimitsdn' && value !== "" && !valid_dn(value)) {
                 valueErr = true;
                 errObj[attr] = true;
+                disableSaveBtn = true;
             }
             if (value === "" && attr !== 'nsslapd-anonlimitsdn' && (typeof value !== "boolean")) {
                 valueErr = true;
@@ -349,7 +341,7 @@ export class ServerSettings extends React.Component {
             }
             if (attr === 'nsslapd-haproxy-trusted-ip') {
                 for (const ip of value) {
-                    if (value && !isValidIpAddress(ip)) {
+                    if (value && !isValidIpAddressOrCIDR(ip)) {
                         invalidIP = true;
                         disableSaveBtn = true;
                         break;
@@ -374,6 +366,67 @@ export class ServerSettings extends React.Component {
         this.setState({
             [attr]: value,
         }, () => { this.validateSaveBtn(nav_tab, attr, value) });
+    }
+
+    validateAllTabs() {
+        const tabs = ['config', 'rootdn', 'diskmon', 'adv'];
+        tabs.forEach(tab => {
+            let attrs;
+            switch (tab) {
+            case 'config':
+                attrs = general_attrs;
+                break;
+            case 'rootdn':
+                attrs = rootdn_attrs;
+                break;
+            case 'diskmon':
+                attrs = disk_attrs;
+                break;
+            case 'adv':
+                attrs = adv_attrs;
+                break;
+            }
+            attrs.forEach(attr => {
+                this.validateSaveBtn(tab, attr, this.state[attr]);
+            });
+        });
+    }
+
+    async validatePortOnBlur(attr) {
+        const portValue = Number(this.state[attr]);
+        if (isNaN(portValue)) {
+            return;
+        }
+
+        try {
+            const portInUse = await is_port_in_use(portValue);
+            const origValue = Number(this.state['_' + attr]);
+
+            const errObj = { ...this.state.errObjConfig };
+
+            if (portInUse && portValue !== origValue) {
+                errObj[attr] = true;
+            } else {
+                errObj[attr] = false;
+            }
+
+            const hasErrors = Object.values(errObj).some(error => error === true);
+            this.setState({
+                errObjConfig: errObj,
+                configSaveDisabled: hasErrors
+            });
+
+        } catch (error) {
+            console.error("Error checking port:", error);
+            const errObj = { ...this.state.errObjConfig };
+            errObj[attr] = true;
+
+            const hasErrors = Object.values(errObj).some(error => error === true);
+            this.setState({
+                errObjConfig: errObj,
+                configSaveDisabled: hasErrors
+            });
+        }
     }
 
     loadConfig() {
@@ -441,8 +494,8 @@ export class ServerSettings extends React.Component {
             errObjDiskMon: {},
             errObjAdv: {},
             // Settings
-            'nsslapd-port': attrs['nsslapd-port'][0],
-            'nsslapd-secureport': attrs['nsslapd-secureport'][0],
+            'nsslapd-port': parseInt(attrs['nsslapd-port'][0]),
+            'nsslapd-secureport': parseInt(attrs['nsslapd-secureport'][0]),
             'nsslapd-localhost': attrs['nsslapd-localhost'][0],
             'nsslapd-listenhost': listenhost,
             'nsslapd-bakdir': attrs['nsslapd-bakdir'][0],
@@ -456,8 +509,8 @@ export class ServerSettings extends React.Component {
             'nsslapd-anonlimitsdn': attrs['nsslapd-anonlimitsdn'][0],
             haproxyIPs: attrs['nsslapd-haproxy-trusted-ip'] ? attrs['nsslapd-haproxy-trusted-ip'] : [],
             'nsslapd-haproxy-trusted-ip': attrs['nsslapd-haproxy-trusted-ip'] ? attrs['nsslapd-haproxy-trusted-ip'] : [],
-            'nsslapd-disk-monitoring-threshold': attrs['nsslapd-disk-monitoring-threshold'][0],
-            'nsslapd-disk-monitoring-grace-period': attrs['nsslapd-disk-monitoring-grace-period'][0],
+            'nsslapd-disk-monitoring-threshold': parseInt(attrs['nsslapd-disk-monitoring-threshold'][0]),
+            'nsslapd-disk-monitoring-grace-period': parseInt(attrs['nsslapd-disk-monitoring-grace-period'][0]),
             'nsslapd-allow-anonymous-access': attrs['nsslapd-allow-anonymous-access'][0],
             'nsslapd-disk-monitoring': diskMonitoring,
             'nsslapd-disk-monitoring-logging-critical': diskLogCritical,
@@ -472,8 +525,8 @@ export class ServerSettings extends React.Component {
             'nsslapd-ignore-time-skew': ignoreSkew,
             'nsslapd-readonly': readOnly,
             // Record original values
-            '_nsslapd-port': attrs['nsslapd-port'][0],
-            '_nsslapd-secureport': attrs['nsslapd-secureport'][0],
+            '_nsslapd-port': parseInt(attrs['nsslapd-port'][0]),
+            '_nsslapd-secureport': parseInt(attrs['nsslapd-secureport'][0]),
             '_nsslapd-localhost': attrs['nsslapd-localhost'][0],
             '_nsslapd-listenhost': listenhost,
             '_nsslapd-bakdir': attrs['nsslapd-bakdir'][0],
@@ -487,8 +540,8 @@ export class ServerSettings extends React.Component {
             '_nsslapd-anonlimitsdn': attrs['nsslapd-anonlimitsdn'][0],
             _haproxyIPs: attrs['nsslapd-haproxy-trusted-ip'] ? attrs['nsslapd-haproxy-trusted-ip'] : [],
             '_nsslapd-haproxy-trusted-ip': attrs['nsslapd-haproxy-trusted-ip'] ? attrs['nsslapd-haproxy-trusted-ip'] : [],
-            '_nsslapd-disk-monitoring-threshold': attrs['nsslapd-disk-monitoring-threshold'][0],
-            '_nsslapd-disk-monitoring-grace-period': attrs['nsslapd-disk-monitoring-grace-period'][0],
+            '_nsslapd-disk-monitoring-threshold': parseInt(attrs['nsslapd-disk-monitoring-threshold'][0]),
+            '_nsslapd-disk-monitoring-grace-period': parseInt(attrs['nsslapd-disk-monitoring-grace-period'][0]),
             '_nsslapd-allow-anonymous-access': attrs['nsslapd-allow-anonymous-access'][0],
             '_nsslapd-disk-monitoring': diskMonitoring,
             '_nsslapd-disk-monitoring-logging-critical': diskLogCritical,
@@ -502,7 +555,10 @@ export class ServerSettings extends React.Component {
             '_nsslapd-entryusn-global': usnGlobal,
             '_nsslapd-ignore-time-skew': ignoreSkew,
             '_nsslapd-readonly': readOnly,
-        }, this.props.enableTree);
+        }, () => {
+            this.validateAllTabs();
+            this.props.enableTree();
+        });
     }
 
     handleSaveRootDN() {
@@ -522,7 +578,7 @@ export class ServerSettings extends React.Component {
 
         log_cmd("handleSaveRootDN", "Saving changes to root DN", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.reloadRootDN();
                     this.props.addNotification(
@@ -531,11 +587,11 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.reloadRootDN();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error updating Directory Manager configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error updating Directory Manager configuration - $0"), errMsg)
                     );
                 });
     }
@@ -547,7 +603,7 @@ export class ServerSettings extends React.Component {
         ];
         log_cmd("handleReloadConfig", "Reload Directory Manager configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.attrs;
@@ -568,13 +624,13 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.setState({
                         rootDNReloading: false,
                     });
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error reloading Directory Manager configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error reloading Directory Manager configuration - $0"), errMsg)
                     );
                 });
     }
@@ -603,7 +659,7 @@ export class ServerSettings extends React.Component {
 
         log_cmd("handleSaveDiskMonitoring", "Saving changes to Disk Monitoring", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.reloadDiskMonitoring();
                     this.props.addNotification(
@@ -612,11 +668,11 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.reloadDiskMonitoring();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error updating Disk Monitoring configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error updating Disk Monitoring configuration - $0"), errMsg)
                     );
                 });
     }
@@ -628,7 +684,7 @@ export class ServerSettings extends React.Component {
         ];
         log_cmd("reloadDiskMonitoring", "Reload Disk Monitoring configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.attrs;
@@ -659,13 +715,13 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.setState({
                         diskMonReloading: false,
                     });
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error reloading Disk Monitoring configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error reloading Disk Monitoring configuration - $0"), errMsg)
                     );
                 });
     }
@@ -678,7 +734,7 @@ export class ServerSettings extends React.Component {
         ];
         log_cmd("handleMultivaluedAttributeReplace", "Removing cn=config attribute", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     if (attrs.length > 0) {
                         const cmd = [
@@ -687,7 +743,7 @@ export class ServerSettings extends React.Component {
                         ];
                         log_cmd("handleMultivaluedAttributeReplace", "Adding multivalued cn=config attribute", cmd);
                         cockpit
-                                .spawn(cmd, { superuser: true, err: "message" })
+                                .spawn(cmd, { superuser: "require", err: "message" })
                                 .done(content => {
                                     this.reloadAdvanced();
                                     this.props.addNotification(
@@ -696,11 +752,11 @@ export class ServerSettings extends React.Component {
                                     );
                                 })
                                 .fail(err => {
-                                    const errMsg = JSON.parse(err);
+                                    const errMsg = getApiErrorMessage(err);
                                     this.reloadAdvanced();
                                     this.props.addNotification(
                                         "error",
-                                        `Error updating Advanced configuration - ${errMsg.desc}`
+                                        `Error updating Advanced configuration - ${errMsg}`
                                     );
                                 });
                     } else {
@@ -712,11 +768,11 @@ export class ServerSettings extends React.Component {
                     }
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.reloadAdvanced();
                     this.props.addNotification(
                         "error",
-                        `Error updating Advanced configuration - ${errMsg.desc}`
+                        `Error updating Advanced configuration - ${errMsg}`
                     );
                 });
     }
@@ -762,7 +818,7 @@ export class ServerSettings extends React.Component {
         }
         log_cmd("handleSaveAdvanced", "Saving Advanced configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     if (doHaproxy) {
                         this.handleMultivaluedAttributeReplace(addHAproxy);
@@ -775,11 +831,11 @@ export class ServerSettings extends React.Component {
                     }
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.reloadAdvanced();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error updating Advanced configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error updating Advanced configuration - $0"), errMsg)
                     );
                 });
     }
@@ -791,7 +847,7 @@ export class ServerSettings extends React.Component {
         ];
         log_cmd("reloadAdvanced", "Reload Advanced configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.attrs;
@@ -876,10 +932,10 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error loading Advanced configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error loading Advanced configuration - $0"), errMsg)
                     );
                     this.setState({
                         advReloading: false,
@@ -905,7 +961,7 @@ export class ServerSettings extends React.Component {
 
         log_cmd("handleSaveConfig", "Applying server config change", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     // Continue with the next mod
                     this.handleReloadConfig();
@@ -915,11 +971,11 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.handleReloadConfig();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error updating server configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error updating server configuration - $0"), errMsg)
                     );
                 });
     }
@@ -931,7 +987,7 @@ export class ServerSettings extends React.Component {
         ];
         log_cmd("handleReloadConfig", "Reload server configuration", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const config = JSON.parse(content);
                     const attrs = config.attrs;
@@ -969,10 +1025,10 @@ export class ServerSettings extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error reloading server configuration - $0"), errMsg.desc)
+                        cockpit.format(_("Error reloading server configuration - $0"), errMsg)
                     );
                     this.setState({
                         configReloading: false,
@@ -1015,8 +1071,8 @@ export class ServerSettings extends React.Component {
                                 plusBtnAriaLabel="plus"
                                 widthChars={8}
                             />
-                            <FormHelperText isError isHidden={!this.state.errObjDiskMon['nsslapd-disk-monitoring-threshold']}>
-                                _("Value must be greater than or equal to 4096")
+                            <FormHelperText  >
+                                {_("Value must be greater than or equal to 4096")}
                             </FormHelperText>
                         </GridItem>
                     </Grid>
@@ -1050,7 +1106,7 @@ export class ServerSettings extends React.Component {
                             <Checkbox
                                 id="nsslapd-disk-monitoring-logging-critical"
                                 isChecked={this.state['nsslapd-disk-monitoring-logging-critical']}
-                                onChange={(str, e) => {
+                                onChange={(e, str) => {
                                     this.handleChange(e, "diskmon");
                                 }}
                                 label={_("Preserve Logs Even If Disk Space Gets Low")}
@@ -1078,13 +1134,13 @@ export class ServerSettings extends React.Component {
                             <TextContent>
                                 <Text component={TextVariants.h3}>
                                     {_("Server Settings")}
-                                    <FontAwesomeIcon
-                                        size="lg"
-                                        className="ds-left-margin ds-refresh"
-                                        icon={faSyncAlt}
-                                        title={_("Refresh configuration settings")}
+                                    <Button
+                                        variant="plain"
+                                        aria-label={_("Refresh configuration settings")}
                                         onClick={this.handleReloadConfig}
-                                    />
+                                    >
+                                        <SyncAltIcon size="lg" />
+                                    </Button>
                                 </Text>
                             </TextContent>
                         </GridItem>
@@ -1093,14 +1149,14 @@ export class ServerSettings extends React.Component {
                     <div className={this.state.loading ? 'ds-fadeout' : 'ds-fadein ds-left-margin'}>
                         <Tabs isFilled className="ds-margin-top-lg" activeKey={this.state.activeTabKey} onSelect={this.handleNavSelect}>
                             <Tab eventKey={0} title={<TabTitleText>{_("General Settings")}</TabTitleText>}>
-                                <Form autoComplete="off" className="ds-margin-top-xlg">
+                                <Form autoComplete="off" className="ds-margin-top-xlg ds-left-margin">
                                     <Grid
                                         title={_("The version of the Directory Server package")}
                                     >
                                         <GridItem className="ds-label" span={2}>
                                             {_("Server Version")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.props.version}
                                                 type="text"
@@ -1117,14 +1173,14 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("Server Hostname")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.state['nsslapd-localhost']}
                                                 type="text"
                                                 id="nsslapd-localhost"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="server-hostname"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "config");
                                                 }}
                                                 validated={this.state.errObjConfig['nsslapd-localhost'] ? ValidatedOptions.error : ValidatedOptions.default}
@@ -1137,21 +1193,28 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("LDAP Port")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <NumberInput
                                                 value={this.state['nsslapd-port']}
                                                 min={1}
                                                 max={65534}
                                                 onMinus={() => { this.onMinusConfig("nsslapd-port", "config") }}
                                                 onChange={(e) => { this.onConfigChange(e, "nsslapd-port", 1, 65534, "config") }}
+                                                onBlur={() => { this.validatePortOnBlur("nsslapd-port") }}
                                                 onPlus={() => { this.onPlusConfig("nsslapd-port", "config") }}
                                                 inputName="input"
                                                 inputAriaLabel="number input"
                                                 minusBtnAriaLabel="minus"
                                                 plusBtnAriaLabel="plus"
                                                 widthChars={8}
-                                                validated={this.state.errObjConfig['nsslapd-port'] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
+                                            {this.state.errObjConfig['nsslapd-port'] &&
+                                                <HelperText>
+                                                    <HelperTextItem variant="error">
+                                                        This port is already in use, please choose another.
+                                                    </HelperTextItem>
+                                                </HelperText>
+                                            }
                                         </GridItem>
                                     </Grid>
                                     <Grid
@@ -1160,21 +1223,29 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("LDAPS Port")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <NumberInput
                                                 value={this.state['nsslapd-secureport']}
                                                 min={1}
                                                 max={65534}
                                                 onMinus={() => { this.onMinusConfig("nsslapd-secureport", "config") }}
                                                 onChange={(e) => { this.onConfigChange(e, "nsslapd-secureport", 1, 65534, "config") }}
+                                                onBlur={() => { this.validatePortOnBlur("nsslapd-secureport") }}
                                                 onPlus={() => { this.onPlusConfig("nsslapd-secureport", "config") }}
                                                 inputName="input"
                                                 inputAriaLabel="number input"
                                                 minusBtnAriaLabel="minus"
                                                 plusBtnAriaLabel="plus"
                                                 widthChars={8}
-                                                validated={this.state.errObjConfig['nsslapd-secureport'] ? ValidatedOptions.error : ValidatedOptions.default}
+
                                             />
+                                            {this.state.errObjConfig['nsslapd-secureport'] &&
+                                                <HelperText>
+                                                    <HelperTextItem variant="error">
+                                                        This port is already in use, please choose another.
+                                                    </HelperTextItem>
+                                                </HelperText>
+                                            }
                                         </GridItem>
                                     </Grid>
                                     <Grid
@@ -1183,14 +1254,14 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("Listen Host Address")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.state['nsslapd-listenhost']}
                                                 type="text"
                                                 id="nsslapd-listenhost"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="server-listenhost"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "config");
                                                 }}
                                                 validated={this.state.errObjConfig['nsslapd-listenhost'] ? ValidatedOptions.error : ValidatedOptions.default}
@@ -1203,20 +1274,20 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("Backup Directory")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.state['nsslapd-bakdir']}
                                                 type="text"
                                                 id="nsslapd-bakdir"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="server-bakdir"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "config");
                                                 }}
                                                 validated={this.state.errObjConfig['nsslapd-bakdir'] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
                                             {this.state.errObjConfig['nsslapd-bakdir'] &&
-                                                <FormHelperText isError isHidden={!this.state.errObjConfig['nsslapd-bakdir']}>
+                                                <FormHelperText  >
                                                     Invalid path
                                                 </FormHelperText>}
                                         </GridItem>
@@ -1227,20 +1298,20 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("LDIF File Directory")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.state['nsslapd-ldifdir']}
                                                 type="text"
                                                 id="nsslapd-ldifdir"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="server-ldifdir"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "config");
                                                 }}
                                                 validated={this.state.errObjConfig['nsslapd-ldifdir'] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
                                             {this.state.errObjConfig['nsslapd-ldifdir'] &&
-                                                <FormHelperText isError isHidden={!this.state.errObjConfig['nsslapd-ldifdir']}>
+                                                <FormHelperText  >
                                                     Invalid path
                                                 </FormHelperText>}
                                         </GridItem>
@@ -1251,20 +1322,20 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("Schema Directory")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.state['nsslapd-schemadir']}
                                                 type="text"
                                                 id="nsslapd-schemadir"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="server-schemadir"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "config");
                                                 }}
                                                 validated={this.state.errObjConfig['nsslapd-schemadir'] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
                                             {this.state.errObjConfig['nsslapd-schemadir'] &&
-                                                <FormHelperText isError isHidden={!this.state.errObjConfig['nsslapd-schemadir']}>
+                                                <FormHelperText  >
                                                     Invalid path
                                                 </FormHelperText>}
                                         </GridItem>
@@ -1275,20 +1346,20 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={2}>
                                             {_("Certificate Directory")}
                                         </GridItem>
-                                        <GridItem span={10}>
+                                        <GridItem span={9}>
                                             <TextInput
                                                 value={this.state['nsslapd-certdir']}
                                                 type="text"
                                                 id="nsslapd-certdir"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="server-certdir"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "config");
                                                 }}
                                                 validated={this.state.errObjConfig['nsslapd-certdir'] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
                                             {this.state.errObjConfig['nsslapd-certdir'] &&
-                                                <FormHelperText isError isHidden={!this.state.errObjConfig['nsslapd-certdir']}>
+                                                <FormHelperText  >
                                                     Invalid path
                                                 </FormHelperText>}
                                         </GridItem>
@@ -1297,7 +1368,7 @@ export class ServerSettings extends React.Component {
                                 <Button
                                     isDisabled={this.state.configSaveDisabled || this.state.configReloading}
                                     variant="primary"
-                                    className="ds-margin-top-xlg"
+                                    className="ds-margin-top-xlg ds-left-margin"
                                     onClick={this.handleSaveConfig}
                                     isLoading={this.state.configReloading}
                                     spinnerAriaValueText={this.state.configReloading ? _("Saving") : undefined}
@@ -1308,14 +1379,14 @@ export class ServerSettings extends React.Component {
                             </Tab>
 
                             <Tab eventKey={1} title={<TabTitleText>{_("Directory Manager")}</TabTitleText>}>
-                                <Form className="ds-margin-top-xlg" isHorizontal autoComplete="off">
+                                <Form className="ds-margin-top-xlg ds-left-margin" isHorizontal>
                                     <Grid
                                         title={_("The DN of the unrestricted directory manager (nsslapd-rootdn).")}
                                     >
                                         <GridItem className="ds-label" span={3}>
                                             {_("Directory Manager DN")}
                                         </GridItem>
-                                        <GridItem span={9}>
+                                        <GridItem span={5}>
                                             <TextInput
                                                 value={this.state['nsslapd-rootdn']}
                                                 type="text"
@@ -1332,14 +1403,14 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={3}>
                                             {_("Directory Manager Password")}
                                         </GridItem>
-                                        <GridItem span={9}>
+                                        <GridItem span={5}>
                                             <TextInput
                                                 value={this.state['nsslapd-rootpw']}
                                                 type="password"
                                                 id="nsslapd-rootpw"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="nsslapd-rootpw"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "rootdn");
                                                 }}
                                                 validated={this.state.errObjRootDN['nsslapd-rootpw'] ? ValidatedOptions.error : ValidatedOptions.default}
@@ -1352,14 +1423,14 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={3}>
                                             {_("Confirm Password")}
                                         </GridItem>
-                                        <GridItem span={9}>
+                                        <GridItem span={5}>
                                             <TextInput
                                                 value={this.state.confirmRootpw}
                                                 type="password"
                                                 id="confirmRootpw"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="confirmRootpw"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "rootdn");
                                                 }}
                                                 validated={this.state.errObjRootDN.confirmRootpw ? ValidatedOptions.error : ValidatedOptions.default}
@@ -1372,11 +1443,11 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={3}>
                                             {_("Password Storage Scheme")}
                                         </GridItem>
-                                        <GridItem span={9}>
+                                        <GridItem span={5}>
                                             <FormSelect
                                                 id="nsslapd-rootpwstoragescheme"
                                                 value={this.state['nsslapd-rootpwstoragescheme']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "rootdn");
                                                 }}
                                                 aria-label="FormSelect Input"
@@ -1390,7 +1461,7 @@ export class ServerSettings extends React.Component {
                                 </Form>
                                 <Button
                                     variant="primary"
-                                    className="ds-margin-top-xlg"
+                                    className="ds-margin-top-xlg ds-left-margin"
                                     isDisabled={this.state.rootDNSaveDisabled || this.state.rootDNReloading}
                                     onClick={this.handleSaveRootDN}
                                     isLoading={this.state.rootDNReloading}
@@ -1405,7 +1476,7 @@ export class ServerSettings extends React.Component {
                                     <Checkbox
                                         id="nsslapd-disk-monitoring"
                                         isChecked={this.state['nsslapd-disk-monitoring']}
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handleChange(e, "diskmon");
                                         }}
                                         label={_("Enable Disk Space Monitoring")}
@@ -1425,13 +1496,13 @@ export class ServerSettings extends React.Component {
                                 </Button>
                             </Tab>
                             <Tab eventKey={3} title={<TabTitleText>{_("Advanced Settings")}</TabTitleText>}>
-                                <Form className="ds-margin-top-xlg ds-margin-left" isHorizontal autoComplete="off">
+                                <Form className="ds-margin-top-xlg ds-left-margin" isHorizontal autoComplete="off">
                                     <Grid>
                                         <GridItem span={5}>
                                             <Checkbox
                                                 id="nsslapd-schemacheck"
                                                 isChecked={this.state['nsslapd-schemacheck']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Enable schema checking (nsslapd-schemacheck).")}
@@ -1443,7 +1514,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-syntaxcheck"
                                                 isChecked={this.state['nsslapd-syntaxcheck']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Enable attribute syntax checking (nsslapd-syntaxcheck).")}
@@ -1456,7 +1527,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-plugin-logging"
                                                 isChecked={this.state['nsslapd-plugin-logging']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Enable plugins to log access and audit events.  (nsslapd-plugin-logging).")}
@@ -1467,7 +1538,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-syntaxlogging"
                                                 isChecked={this.state['nsslapd-syntaxlogging']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Enable syntax logging (nsslapd-syntaxlogging).")}
@@ -1480,7 +1551,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-plugin-binddn-tracking"
                                                 isChecked={this.state['nsslapd-plugin-binddn-tracking']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 label={_("Enable Plugin Bind DN Tracking")}
@@ -1491,7 +1562,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-attribute-name-exceptions"
                                                 isChecked={this.state['nsslapd-attribute-name-exceptions']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Allows non-standard characters in attribute names to be used for backwards compatibility with older servers (nsslapd-attribute-name-exceptions).")}
@@ -1504,7 +1575,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-dn-validate-strict"
                                                 isChecked={this.state['nsslapd-dn-validate-strict']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 label={_("Strict DN Syntax Validation")}
@@ -1515,7 +1586,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-entryusn-global"
                                                 isChecked={this.state['nsslapd-entryusn-global']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("For USN plugin - maintain unique USNs across all back end databases (nsslapd-entryusn-global).")}
@@ -1528,7 +1599,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-ignore-time-skew"
                                                 isChecked={this.state['nsslapd-ignore-time-skew']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Ignore replication time skew when acquiring a replica to start a replciation session (nsslapd-ignore-time-skew).")}
@@ -1539,7 +1610,7 @@ export class ServerSettings extends React.Component {
                                             <Checkbox
                                                 id="nsslapd-readonly"
                                                 isChecked={this.state['nsslapd-readonly']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 title={_("Make entire server read-only (nsslapd-readonly)")}
@@ -1554,11 +1625,11 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={3}>
                                             {_("Allow Anonymous Access")}
                                         </GridItem>
-                                        <GridItem span={9}>
+                                        <GridItem span={5}>
                                             <FormSelect
                                                 id="nsslapd-allow-anonymous-access"
                                                 value={this.state['nsslapd-allow-anonymous-access']}
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
                                                 aria-label="FormSelect Input"
@@ -1580,56 +1651,48 @@ export class ServerSettings extends React.Component {
                                         <GridItem className="ds-label" span={3}>
                                             {_("Anonymous Resource Limits DN")}
                                         </GridItem>
-                                        <GridItem span={9}>
+                                        <GridItem span={5}>
                                             <TextInput
                                                 value={this.state['nsslapd-anonlimitsdn']}
                                                 type="text"
                                                 id="nsslapd-anonlimitsdn"
                                                 aria-describedby="horizontal-form-name-helper"
                                                 name="nsslapd-anonlimitsdn"
-                                                onChange={(str, e) => {
+                                                onChange={(e, str) => {
                                                     this.handleChange(e, "adv");
                                                 }}
-                                                validated={this.state.errObjAdv.anonLimitsDN ? ValidatedOptions.error : ValidatedOptions.default}
+                                                validated={this.state.errObjAdv['nsslapd-anonlimitsdn'] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
                                         </GridItem>
                                     </Grid>
                                     <Grid
-                                        title="HAProxy header is only checked if this setting (nsslapd-haproxy-trusted-ip) is configured. It should have a list of trusted HAProxy server IPs"
+                                        title="HAProxy header is only checked if this setting (nsslapd-haproxy-trusted-ip) is configured. It should have a list of trusted HAProxy server IPs or subnets in CIDR notation (e.g., 192.168.1.0/24)"
                                     >
                                         <GridItem className="ds-label" span={3}>
-                                            Trusted HAProxy Server IPs
+                                            Trusted HAProxy Server IPs/Subnets
                                         </GridItem>
-                                        <GridItem span={9}>
-                                            <Select
-                                                variant={SelectVariant.typeaheadMulti}
-                                                id="nsslpad-haproxy-trusted-ip"
-                                                typeAheadAriaLabel="Type trusted HAProxy server IP address"
-                                                onToggle={this.handleOnHaproxyIPsToggle}
+                                        <GridItem span={5}>
+                                            <TypeaheadSelect
+                                                selected={this.state.haproxyIPs}
                                                 onSelect={(e, selection) => {
                                                     this.handleOnHaproxyIPsSelect(e, selection, "adv");
                                                 }}
                                                 onClear={(e) => {
                                                     this.handleOnHaproxyIPsClear(e, "adv");
                                                 }}
-                                                selections={this.state.haproxyIPs}
+                                                options={[]}
                                                 isOpen={this.state.isHaproxyIPsOpen}
-                                                aria-labelledby="typeAhead-haproxy-ips"
-                                                placeholderText="Type trusted HAProxy server IP address"
-                                                isCreatable
+                                                onToggle={this.handleOnHaproxyIPsToggle}
+                                                placeholder="Type trusted HAProxy server IP or subnet (e.g., 192.168.1.0/24)"
+                                                ariaLabel="Type trusted HAProxy server IP address or CIDR subnet"
+                                                validated={this.state.invalidIP ? "error" : "default"}
+                                                isMulti={true}
+                                                isCreatable={true}
                                                 onCreateOption={this.handleOnCreateHaproxyIP}
-                                                validated={this.state.invalidIP ? ValidatedOptions.error : ValidatedOptions.default}
-                                            >
-                                                {[].map((attr, index) => (
-                                                    <SelectOption
-                                                        key={index}
-                                                        value={attr}
-                                                    />
-                                                ))}
-                                            </Select>
+                                            />
                                             {(this.state.invalidIP) &&
                                                 <HelperText className="ds-left-margin">
-                                                    <HelperTextItem variant="error">Invalid format for IP address</HelperTextItem>
+                                                    <HelperTextItem variant="error">Invalid format for IP address or CIDR subnet</HelperTextItem>
                                                 </HelperText>}
                                         </GridItem>
                                     </Grid>
@@ -1637,7 +1700,7 @@ export class ServerSettings extends React.Component {
                                 <Button
                                     isDisabled={this.state.advSaveDisabled || this.state.advReloading}
                                     variant="primary"
-                                    className="ds-margin-top-xlg"
+                                    className="ds-margin-top-xlg ds-left-margin"
                                     onClick={this.handleSaveAdvanced}
                                     isLoading={this.state.advReloading}
                                     spinnerAriaValueText={this.state.advReloading ? _("Saving") : undefined}

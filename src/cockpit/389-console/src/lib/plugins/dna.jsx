@@ -1,33 +1,31 @@
 import cockpit from "cockpit";
 import React from "react";
 import {
-    Button,
-    Form,
-    FormSelect,
-    FormSelectOption,
-    Grid,
-    GridItem,
-    Modal,
-    ModalVariant,
-    NumberInput,
-    Select,
-    SelectOption,
-    SelectVariant,
-    Spinner,
-    Tab,
-    Tabs,
-    TabTitleText,
-    TextInput,
-    Text,
-    TextContent,
-    TextVariants,
-    Tooltip,
-    ValidatedOptions,
-} from "@patternfly/react-core";
+	Button,
+	Form,
+	FormSelect,
+	FormSelectOption,
+	Grid,
+	GridItem,
+	Modal,
+	ModalVariant,
+	NumberInput,
+	Spinner,
+	Tab,
+	Tabs,
+	TabTitleText,
+	TextInput,
+	Text,
+	TextContent,
+	TextVariants,
+	Tooltip,
+	ValidatedOptions
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
 import { DNATable, DNASharedTable } from "./pluginTables.jsx";
 import PluginBasicConfig from "./pluginBasicConfig.jsx";
 import PropTypes from "prop-types";
-import { log_cmd, valid_dn, listsEqual } from "../tools.jsx";
+import { log_cmd, valid_dn, listsEqual, getApiErrorMessage } from "../tools.jsx";
 import { DoubleConfirmModal } from "../notifications.jsx";
 
 const _ = cockpit.gettext;
@@ -88,7 +86,7 @@ class DNAPlugin extends React.Component {
             saveBtnDisabled: true,
         };
 
-        this.handleToggle = isOpen => {
+        this.handleToggle = (_event, isOpen) => {
             this.setState({
                 isOpen
             });
@@ -102,22 +100,9 @@ class DNAPlugin extends React.Component {
         };
 
         this.handleSelect = (event, selection) => {
-            const { selected } = this.state;
-            if (selected.includes(selection)) {
-                this.setState(
-                    prevState => ({
-                        selected: prevState.selected.filter(item => item !== selection),
-                        isOpen: false
-                    }), () => { this.validateConfig() }
-                );
-            } else {
-                this.setState(
-                    prevState => ({
-                        selected: [...prevState.selected, selection],
-                        isOpen: false,
-                    }), () => { this.validateConfig() }
-                );
-            }
+            this.setState({
+                selected: Array.isArray(selection) ? selection : [],
+            }, () => { this.validateConfig() });
         };
 
         this.maxValue = 20000000;
@@ -220,7 +205,7 @@ class DNAPlugin extends React.Component {
         });
     }
 
-    handleFieldChange(str, e) {
+    handleFieldChange(e, str) {
         this.setState({
             [e.target.id]: e.target.value,
         }, () => { this.validateConfig() });
@@ -238,7 +223,7 @@ class DNAPlugin extends React.Component {
         ];
         log_cmd("loadConfigs", "Get DNA Plugin configs", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const myObject = JSON.parse(content);
                     const tableKey = this.state.tableKey + 1;
@@ -249,9 +234,9 @@ class DNAPlugin extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     if (err !== 0) {
-                        console.log("loadConfigs failed", errMsg.desc);
+                        console.log("loadConfigs failed", errMsg);
                     }
                     this.setState({
                         loading: false,
@@ -281,7 +266,7 @@ class DNAPlugin extends React.Component {
         ];
         log_cmd("loadSharedConfigs", "Get DNA Plugin shared configs", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const myObject = JSON.parse(content);
                     this.setState({
@@ -291,9 +276,9 @@ class DNAPlugin extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     if (err !== 0) {
-                        console.log("loadSharedConfigs failed", errMsg.desc);
+                        console.log("loadSharedConfigs failed", errMsg);
                     }
                 });
     }
@@ -347,7 +332,7 @@ class DNAPlugin extends React.Component {
             log_cmd("openModal", "Fetch the DNA Plugin config entry", cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
@@ -552,7 +537,7 @@ class DNAPlugin extends React.Component {
         log_cmd("DNAOperation", `Do the ${action} operation on the DNA Plugin`, cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -568,11 +553,11 @@ class DNAPlugin extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     if (muteError !== true) {
                         this.props.addNotification(
                             "error",
-                            cockpit.format(_("Error during the config entry $0 operation - $1"), action, errMsg.desc)
+                            cockpit.format(_("Error during the config entry $0 operation - $1"), action, errMsg)
                         );
                     }
                     this.loadConfigs();
@@ -602,7 +587,7 @@ class DNAPlugin extends React.Component {
         log_cmd("deleteConfig", "Delete the DNA Plugin config entry", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -616,10 +601,10 @@ class DNAPlugin extends React.Component {
                     this.handleCloseModal();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the config entry removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during the config entry removal operation - $0"), errMsg)
                     );
                     this.closeDeleteConfirm();
                     this.loadConfigs();
@@ -654,7 +639,7 @@ class DNAPlugin extends React.Component {
             log_cmd("openSharedModal", "Fetch the DNA Plugin shared config entry", cmd);
             cockpit
                     .spawn(cmd, {
-                        superuser: true,
+                        superuser: "require",
                         err: "message"
                     })
                     .done(content => {
@@ -760,7 +745,7 @@ class DNAPlugin extends React.Component {
         );
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -775,10 +760,10 @@ class DNAPlugin extends React.Component {
                     });
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the config entry set operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during the config entry set operation - $0"), errMsg)
                     );
                     this.loadSharedConfigs(this.state.sharedConfigEntry);
                     this.handleCloseSharedModal();
@@ -809,7 +794,7 @@ class DNAPlugin extends React.Component {
         log_cmd("deleteSharedConfig", "Delete the DNA Plugin Shared config entry", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -822,10 +807,10 @@ class DNAPlugin extends React.Component {
                     this.loadSharedConfigs(this.state.sharedConfigEntry);
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the shared config entry removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during the shared config entry removal operation - $0"), errMsg)
                     );
                     this.closeSharedDeleteConfirm();
                     this.loadSharedConfigs(this.state.sharedConfigEntry);
@@ -1076,7 +1061,7 @@ class DNAPlugin extends React.Component {
                                             id="configName"
                                             aria-describedby="configName"
                                             name="configName"
-                                            onChange={this.handleFieldChange}
+                                            onChange={(e, str) => this.handleFieldChange(e, str)}
                                             isDisabled={!newEntry}
                                             validated={error.configName ? ValidatedOptions.error : ValidatedOptions.default}
                                         />
@@ -1087,25 +1072,18 @@ class DNAPlugin extends React.Component {
                                         {_("DNA Managed Attributes")}
                                     </GridItem>
                                     <GridItem span={9}>
-                                        <Select
-                                            variant={SelectVariant.typeaheadMulti}
-                                            typeAheadAriaLabel="Type an attribute"
-                                            onToggle={this.handleToggle}
+                                        <TypeaheadSelect
+                                            selected={selected}
                                             onSelect={this.handleSelect}
                                             onClear={this.handleClearSelection}
-                                            selections={selected}
+                                            options={this.props.attributes}
                                             isOpen={this.state.isOpen}
-                                            aria-labelledby="typeAhead-1"
-                                            placeholderText={_("Type an attribute...")}
+                                            onToggle={this.handleToggle}
+                                            placeholder={_("Type an attribute...")}
+                                            ariaLabel="Type an attribute"
                                             validated={selected.length === 0 ? 'error' : 'default'}
-                                        >
-                                            {this.props.attributes.map((attr) => (
-                                                <SelectOption
-                                                    key={attr}
-                                                    value={attr}
-                                                />
-                                            ))}
-                                        </Select>
+                                            isMulti={true}
+                                        />
                                     </GridItem>
                                 </Grid>
                                 <Grid title={_("Sets an LDAP filter to use to search for and identify the entries to which to apply the distributed numeric assignment range (dnaFilter)")}>
@@ -1119,7 +1097,7 @@ class DNAPlugin extends React.Component {
                                             id="filter"
                                             aria-describedby="filter"
                                             name="filter"
-                                            onChange={this.handleFieldChange}
+                                            onChange={(e, str) => this.handleFieldChange(e, str)}
                                             validated={error.filter ? ValidatedOptions.error : ValidatedOptions.default}
                                         />
                                     </GridItem>
@@ -1135,7 +1113,7 @@ class DNAPlugin extends React.Component {
                                             id="scope"
                                             aria-describedby="scope"
                                             name="scope"
-                                            onChange={this.handleFieldChange}
+                                            onChange={(e, str) => this.handleFieldChange(e, str)}
                                             validated={error.scope ? ValidatedOptions.error : ValidatedOptions.default}
                                         />
                                     </GridItem>
@@ -1191,7 +1169,7 @@ class DNAPlugin extends React.Component {
                                             id="magicRegen"
                                             aria-describedby="magicRegen"
                                             name="magicRegen"
-                                            onChange={this.handleFieldChange}
+                                            onChange={(e, str) => this.handleFieldChange(e, str)}
                                             validated={error.magicRegen ? ValidatedOptions.error : ValidatedOptions.default}
                                         />
                                     </GridItem>
@@ -1209,7 +1187,7 @@ class DNAPlugin extends React.Component {
                                                 aria-describedby={content.name}
                                                 name={content.name}
                                                 key={content.name}
-                                                onChange={this.handleFieldChange}
+                                                onChange={(e, str) => this.handleFieldChange(e, str)}
                                                 validated={error[content.id] ? ValidatedOptions.error : ValidatedOptions.default}
                                             />
                                         </GridItem>
@@ -1305,7 +1283,7 @@ class DNAPlugin extends React.Component {
                                             id="sharedConfigEntry"
                                             aria-describedby="sharedConfigEntry"
                                             name="sharedConfigEntry"
-                                            onChange={this.handleFieldChange}
+                                            onChange={(e, str) => this.handleFieldChange(e, str)}
                                             validated={error.sharedConfigEntry ? ValidatedOptions.error : ValidatedOptions.default}
                                         />
                                     </GridItem>
@@ -1386,7 +1364,7 @@ class DNAPlugin extends React.Component {
                                 <FormSelect
                                     id="sharedRemoteBindMethod"
                                     value={sharedRemoteBindMethod}
-                                    onChange={this.handleFieldChange}
+                                    onChange={(e, str) => this.handleFieldChange(e, str)}
                                     aria-label="FormSelect Input"
                                     validated={sharedResult.validatedBindMethod}
                                 >
@@ -1403,7 +1381,7 @@ class DNAPlugin extends React.Component {
                                 <FormSelect
                                     id="sharedRemoteConnProtocol"
                                     value={sharedRemoteConnProtocol}
-                                    onChange={this.handleFieldChange}
+                                    onChange={(e, str) => this.handleFieldChange(e, str)}
                                     aria-label="FormSelect Input"
                                     validated={sharedResult.validatedConnProtocol}
                                 >

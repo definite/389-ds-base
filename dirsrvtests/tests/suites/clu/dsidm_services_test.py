@@ -11,12 +11,13 @@ import subprocess
 import pytest
 import logging
 import os
+import json
 
 from lib389 import DEFAULT_SUFFIX
 from lib389.cli_idm.service import list, get, get_dn, create, delete, modify, rename
-from lib389.topologies import topology_st
+from test389.topologies import topology_st
 from lib389.cli_base import FakeArgs
-from lib389.utils import ds_is_older, ensure_str
+from lib389.utils import ds_is_older, ensure_str, is_a_dn
 from lib389.idm.services import ServiceAccounts
 from . import check_value_in_log_and_reset
 
@@ -73,6 +74,7 @@ def test_dsidm_service_list(topology_st, create_test_service):
     standalone = topology_st.standalone
     args = FakeArgs()
     args.json = False
+    args.full_dn = False
     service_value = 'test_service'
     json_list = ['type',
                  'list',
@@ -90,12 +92,21 @@ def test_dsidm_service_list(topology_st, create_test_service):
     list(standalone, DEFAULT_SUFFIX, topology_st.logcap.log, args)
     check_value_in_log_and_reset(topology_st, content_list=json_list, check_value=service_value)
 
+    log.info('Test full_dn option with list')
+    args.full_dn = True
+    list(standalone, DEFAULT_SUFFIX, topology_st.logcap.log, args)
+    result = topology_st.logcap.get_raw_outputs()
+    json_result = json.loads(result[0])
+    assert is_a_dn(json_result['items'][0])
+    args.full_dn = False
+
     log.info('Delete the service')
     services = ServiceAccounts(topology_st.standalone, DEFAULT_SUFFIX)
     testservice = services.get(service_value)
     testservice.delete()
 
     log.info('Test empty dsidm service list with json')
+    topology_st.logcap.flush()
     list(standalone, DEFAULT_SUFFIX, topology_st.logcap.log, args)
     check_value_in_log_and_reset(topology_st, content_list=json_list, check_value_not=service_value)
 
@@ -170,7 +181,7 @@ def test_dsidm_service_get_rdn(topology_st, create_test_service):
     check_value_in_log_and_reset(topology_st, content_list=json_content)
 
 
-@pytest.mark.xfail(reason="Will fail because of bz1893667")
+#@pytest.mark.xfail(reason="Will fail because of bz1893667")
 @pytest.mark.skipif(ds_is_older("2.1.0"), reason="Not implemented")
 def test_dsidm_service_get_dn(topology_st, create_test_service):
     """ Test dsidm service get_dn option
@@ -185,20 +196,25 @@ def test_dsidm_service_get_dn(topology_st, create_test_service):
          2. Success
     """
 
+    service_name = 'test_service'
     standalone = topology_st.standalone
     services = ServiceAccounts(standalone, DEFAULT_SUFFIX)
-    test_service = services.get('test_service')
+    test_service = services.get(service_name)
     args = FakeArgs()
     args.dn = test_service.dn
+    args.json = False
 
     log.info('Empty the log file to prevent false data to check about service')
     topology_st.logcap.flush()
 
     log.info('Test dsidm service get_dn without json')
     get_dn(standalone, DEFAULT_SUFFIX, topology_st.logcap.log, args)
-    # check_value_in_log_and_reset(topology_st, content_list=service_content)
-    # The check_value_in_log_and_reset will have to be updated accordinly after bz1893667 is fixed
-    # because now I can't determine the output
+    check_value_in_log_and_reset(topology_st, content_list=service_name)
+
+    log.info('Test dsidm service get_dn with json')
+    args.json = True
+    get_dn(standalone, DEFAULT_SUFFIX, topology_st.logcap.log, args)
+    check_value_in_log_and_reset(topology_st, content_list=service_name)
 
 
 @pytest.mark.skipif(ds_is_older("2.1.0"), reason="Not implemented")

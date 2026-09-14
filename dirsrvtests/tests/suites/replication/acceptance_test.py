@@ -1,5 +1,5 @@
 # --- BEGIN COPYRIGHT BLOCK ---
-# Copyright (C) 2017 Red Hat, Inc.
+# Copyright (C) 2025 Red Hat, Inc.
 # All rights reserved.
 #
 # License: GPL (version 3 or any later version).
@@ -9,11 +9,12 @@
 import pytest
 import logging
 import time
+from lib389.backend import Backend
 from lib389.replica import Replicas
 from lib389.tasks import *
 from lib389.utils import *
-from lib389.topologies import topology_m4 as topo_m4
-from lib389.topologies import topology_m2 as topo_m2
+from test389.topologies import topology_m4 as topo_m4
+from test389.topologies import topology_m2 as topo_m2
 from . import get_repl_entries
 from lib389.idm.user import UserAccount
 from lib389.replica import ReplicationManager, Changelog
@@ -324,6 +325,165 @@ def test_modify_stripattrs(topo_m4):
     assert attr_value in entries[0].data['nsds5replicastripattrs']
 
 
+def test_multi_subsuffix_replication(topo_m4):
+    """Check that replication works with multiple subsuffixes
+
+    :id: ac1aaeae-173e-48e7-847f-03b9867443c4
+    :setup: Four suppliers replication setup
+    :steps:
+        1. Create additional suffixes
+        2. Setup replication for all suppliers
+        3. Generate test data for each suffix (add, modify, remove)
+        4. Wait for replication to complete across all suppliers for each suffix
+        5. Check that all expected data is present on all suppliers
+    :expectedresults:
+        1. Success
+        2. Success
+        3. Success
+        4. Success
+        5. Success (the data is replicated everywhere)
+    """
+
+    SUFFIX_2 = "dc=test2"
+    SUFFIX_3 = f"dc=test3,{DEFAULT_SUFFIX}"
+    all_suffixes = [DEFAULT_SUFFIX, SUFFIX_2, SUFFIX_3]
+
+    test_users_by_suffix = {suffix: [] for suffix in all_suffixes}
+    created_backends = []
+
+    suppliers = [
+        topo_m4.ms["supplier1"],
+        topo_m4.ms["supplier2"],
+        topo_m4.ms["supplier3"],
+        topo_m4.ms["supplier4"]
+    ]
+
+    try:
+        # Setup additional backends and replication for the new suffixes
+        for suffix in [SUFFIX_2, SUFFIX_3]:
+            repl = ReplicationManager(suffix)
+            for supplier in suppliers:
+                # Create a new backend for this suffix
+                props = {
+                    'cn': f'userRoot_{suffix.split(",")[0][3:]}',
+                    'nsslapd-suffix': suffix
+                }
+                be = Backend(supplier)
+                be.create(properties=props)
+                be.create_sample_entries('001004002')
+
+                # Track the backend so we can remove it later
+                created_backends.append((supplier, props['cn']))
+
+                # Enable replication
+                if supplier == suppliers[0]:
+                    repl.create_first_supplier(supplier)
+                else:
+                    repl.join_supplier(suppliers[0], supplier)
+
+            # Create a full mesh topology for this suffix
+            for i, supplier_i in enumerate(suppliers):
+                for j, supplier_j in enumerate(suppliers):
+                    if i != j:
+                        repl.ensure_agreement(supplier_i, supplier_j)
+
+        # Generate test data for each suffix (add, modify, remove)
+        for suffix in all_suffixes:
+            # Create some user entries in supplier1
+            for i in range(20):
+                user_dn = f'uid=test_user_{i},{suffix}'
+                test_user = UserAccount(suppliers[0], user_dn)
+                test_user.create(properties={
+                    'uid': f'test_user_{i}',
+                    'cn': f'Test User {i}',
+                    'sn': f'User{i}',
+                    'userPassword': 'password',
+                    'uidNumber': str(1000 + i),
+                    'gidNumber': '2000',
+                    'homeDirectory': f'/home/test_user_{i}'
+                })
+                test_users_by_suffix[suffix].append(test_user)
+
+            # Perform modifications on these entries
+            for user in test_users_by_suffix[suffix]:
+                # Add some attributes
+                for j in range(3):
+                    user.add('description', f'Description {j}')
+                # Replace an attribute
+                user.replace('cn', f'Modified User {user.get_attr_val_utf8("uid")}')
+                # Delete the attributes we added
+                for j in range(3):
+                    try:
+                        user.remove('description', f'Description {j}')
+                    except Exception:
+                        pass
+
+        # Wait for replication to complete across all suppliers, for each suffix
+        for suffix in all_suffixes:
+            repl = ReplicationManager(suffix)
+            for i, supplier_i in enumerate(suppliers):
+                for j, supplier_j in enumerate(suppliers):
+                    if i != j:
+                        repl.wait_for_replication(supplier_i, supplier_j)
+
+        # Verify that each user and modification replicated to all suppliers
+        for suffix in all_suffixes:
+            for i in range(20):
+                user_dn = f'uid=test_user_{i},{suffix}'
+                # Retrieve this user from all suppliers
+                all_user_objs = topo_m4.all_get_dsldapobject(user_dn, UserAccount)
+                # Ensure it exists in all 4 suppliers
+                assert len(all_user_objs) == 4, (
+                    f"User {user_dn} not found on all suppliers. "
+                    f"Found only on {len(all_user_objs)} suppliers."
+                )
+                # Check modifications: 'cn' should now be 'Modified User test_user_{i}'
+                for user_obj in all_user_objs:
+                    expected_cn = f"Modified User test_user_{i}"
+                    actual_cn = user_obj.get_attr_val_utf8("cn")
+                    assert actual_cn == expected_cn, (
+                        f"User {user_dn} has unexpected 'cn': {actual_cn} "
+                        f"(expected '{expected_cn}') on supplier {user_obj._instance.serverid}"
+                    )
+                    # And check that 'description' attributes were removed
+                    desc_vals = user_obj.get_attr_vals_utf8('description')
+                    for j in range(3):
+                        assert f"Description {j}" not in desc_vals, (
+                            f"User {user_dn} on supplier {user_obj._instance.serverid} "
+                            f"still has 'Description {j}'"
+                        )
+
+        # Check there are no decoding errors
+        assert not topo_m4.ms["supplier1"].ds_error_log.match('.*decoding failed.*')
+        assert not topo_m4.ms["supplier2"].ds_error_log.match('.*decoding failed.*')
+        assert not topo_m4.ms["supplier3"].ds_error_log.match('.*decoding failed.*')
+        assert not topo_m4.ms["supplier4"].ds_error_log.match('.*decoding failed.*')
+
+    finally:
+        for suffix, test_users in test_users_by_suffix.items():
+            for user in test_users:
+                try:
+                    if user.exists():
+                        user.delete()
+                except Exception:
+                    pass
+
+        for suffix in [SUFFIX_2, SUFFIX_3]:
+            repl = ReplicationManager(suffix)
+            for supplier in suppliers:
+                try:
+                    repl.remove_supplier(supplier)
+                except Exception:
+                    pass
+
+        for (supplier, backend_name) in created_backends:
+            be = Backend(supplier, backend_name)
+            try:
+                be.delete()
+            except Exception:
+                pass
+
+
 def test_new_suffix(topo_m4, new_suffix):
     """Check that we can enable replication on a new suffix
 
@@ -352,6 +512,7 @@ def test_new_suffix(topo_m4, new_suffix):
 
     repl.remove_supplier(m1)
     repl.remove_supplier(m2)
+
 
 def test_many_attrs(topo_m4, create_entry):
     """Check a replication with many attributes (add and delete)
@@ -435,7 +596,7 @@ def test_double_delete(topo_m4, create_entry):
         time.sleep(5)
     else:
         time.sleep(1)
-        
+
     log.info('Make searches to check if server is alive')
     entries = get_repl_entries(topo_m4, TEST_ENTRY_NAME, ["uid"])
     assert not entries, "Entry deletion {} wasn't replicated successfully".format(TEST_ENTRY_DN)
@@ -455,13 +616,19 @@ def test_password_repl_error(topo_m4, create_entry):
 
     m1 = topo_m4.ms["supplier1"]
     m2 = topo_m4.ms["supplier2"]
+    m3 = topo_m4.ms["supplier3"]
+    m4 = topo_m4.ms["supplier4"]
     TEST_ENTRY_NEW_PASS = 'new_{}'.format(TEST_ENTRY_NAME)
 
     log.info('Clean the error log')
     m2.deleteErrorLogs()
 
     log.info('Set replication loglevel')
+    m1.config.loglevel((ErrorLog.REPLICA,))
     m2.config.loglevel((ErrorLog.REPLICA,))
+    m3.config.loglevel((ErrorLog.REPLICA,))
+    m4.config.loglevel((ErrorLog.REPLICA,))
+
 
     log.info('Modifying entry {} - change userpassword on supplier 2'.format(TEST_ENTRY_DN))
     test_user_m1 = UserAccount(topo_m4.ms["supplier1"], TEST_ENTRY_DN)
@@ -526,7 +693,23 @@ def test_invalid_agmt(topo_m4):
         assert False
 
 
-def test_warining_for_invalid_replica(topo_m4):
+def test_reject_self_referential_agmt(topo_m4):
+    """Test that creating a replication agreement pointing to self is rejected
+
+    :id: 7df2f91a-878b-4a7e-86f7-4f72ef5726c6
+    :setup: MMR with four suppliers
+    :steps:
+        1. Try to add an agreement on supplier1 that points to supplier1 host/port
+    :expectedresults:
+        1. Agreement creation should fail with UNWILLING_TO_PERFORM
+    """
+    m1 = topo_m4.ms["supplier1"]
+
+    with pytest.raises(ldap.UNWILLING_TO_PERFORM):
+        m1.agreement.create(suffix=DEFAULT_SUFFIX, host=m1.host, port=m1.port)
+
+
+def test_warning_for_invalid_replica(topo_m4):
     """Testing logs to indicate the inconsistency when configuration is performed.
 
     :id: dd689d03-69b8-4bf9-a06e-2acd19d5e2c8
@@ -549,6 +732,7 @@ def test_warining_for_invalid_replica(topo_m4):
     replica.remove_all('nsds5ReplicaBackoffMin')
     log.info('Check the error log for the error')
     assert topo_m4.ms["supplier1"].ds_error_log.match('.*nsds5ReplicaBackoffMax.*10.*invalid.*')
+
 
 def test_csnpurge_large_valueset(topo_m2):
     """Test csn generator test

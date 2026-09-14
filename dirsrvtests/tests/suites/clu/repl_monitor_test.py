@@ -14,7 +14,7 @@ import re
 from lib389.cli_conf.replication import get_repl_monitor_info
 from lib389.tasks import *
 from lib389.utils import *
-from lib389.topologies import topology_m2
+from test389.topologies import topology_m2
 from lib389.cli_base import FakeArgs
 from lib389.cli_base.dsrc import dsrc_arg_concat
 from lib389.cli_base import connect_instance
@@ -77,13 +77,13 @@ def get_hostnames_from_log(port1, port2):
     # search for Supplier :hostname:port 
     # and use \D to insure there is no more number is after
     # the matched port (i.e that 10 is not matching 101)
-    regexp = '(Supplier: )([^:]*)(:' + str(port1) + '\D)'
+    regexp = '(Supplier: )([^:]*)(:' + str(port1) + r'\D)'
     match=re.search(regexp, logtext)
     host_m1 = 'localhost.localdomain'
     if (match is not None):
         host_m1 = match.group(2)
     # Same for supplier 2 
-    regexp = '(Supplier: )([^:]*)(:' + str(port2) + '\D)'
+    regexp = '(Supplier: )([^:]*)(:' + str(port2) + r'\D)'
     match=re.search(regexp, logtext)
     host_m2 = 'localhost.localdomain'
     if (match is not None):

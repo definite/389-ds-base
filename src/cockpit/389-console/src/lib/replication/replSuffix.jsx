@@ -19,16 +19,9 @@ import {
     TextContent,
     TextVariants,
 } from "@patternfly/react-core";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-    faClone,
-    faLeaf,
-    faTree,
-    faSyncAlt
-} from '@fortawesome/free-solid-svg-icons';
-import '@fortawesome/fontawesome-svg-core/styles.css';
+import { SyncAltIcon, TreeIcon, CloneIcon, LeafIcon } from "@patternfly/react-icons";
 import PropTypes from "prop-types";
-import { log_cmd, valid_dn, callCmdStreamPassword } from "../tools.jsx";
+import { log_cmd, valid_dn, callCmdStreamPassword, getApiErrorMessage } from "../tools.jsx";
 
 const _ = cockpit.gettext;
 
@@ -266,7 +259,7 @@ export class ReplSuffix extends React.Component {
         const cmd = ['dsconf', '-j', 'ldapi://%2fvar%2frun%2fslapd-' + this.props.serverId + '.socket', 'replication', 'disable', '--suffix=' + this.props.suffix];
         log_cmd('disableReplication', 'Disable replication', cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.reload(1);
                     this.setState({
@@ -282,10 +275,10 @@ export class ReplSuffix extends React.Component {
                     this.setState({
                         modalSpinning: false
                     });
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to disable replication for $0 - $1"), this.props.suffix, errMsg.desc)
+                        cockpit.format(_("Failed to disable replication for $0 - $1"), this.props.suffix, errMsg)
                     );
                 });
     }
@@ -296,12 +289,12 @@ export class ReplSuffix extends React.Component {
     render () {
         let spinning = "";
         let spintext = "";
-        let suffixIcon = faTree;
+        let SuffixIcon = TreeIcon;
         if (this.props.replicated) {
-            suffixIcon = faClone;
+            SuffixIcon = CloneIcon;
         } else {
             if (this.props.repl === "subsuffix") {
-                suffixIcon = faLeaf;
+                SuffixIcon = LeafIcon;
             }
         }
         if (this.props.spinning) {
@@ -416,13 +409,15 @@ export class ReplSuffix extends React.Component {
             <div id="suffix-page">
                 <Grid>
                     <GridItem className="ds-suffix-header" span={8}>
-                        <FontAwesomeIcon size="sm" icon={suffixIcon} />&nbsp;&nbsp;{this.props.suffix}
-                        <FontAwesomeIcon
-                            className="ds-left-margin ds-refresh"
-                            icon={faSyncAlt}
-                            title={_("Refresh replication settings for this suffix")}
+                        <SuffixIcon />
+                        &nbsp;&nbsp;{this.props.suffix}
+                        <Button 
+                            variant="plain"
+                            aria-label={_("Refresh replication settings for this suffix")}
                             onClick={() => this.props.reload(false)}
-                        />
+                        >
+                            <SyncAltIcon />
+                        </Button>
                         {spinning} {spintext}
                     </GridItem>
                     <GridItem span={4}>

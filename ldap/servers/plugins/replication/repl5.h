@@ -29,6 +29,7 @@
 #include "repl5_ruv.h"
 #include "plstr.h"
 #include <pthread.h>
+#include <stdbool.h>
 
 #define START_UPDATE_DELAY                   2 /* 2 second */
 #define REPLICA_TYPE_WINDOWS                 1
@@ -169,6 +170,9 @@ extern const char *type_nsds5ReplicaBootstrapCredentials;
 extern const char *type_nsds5ReplicaBootstrapBindMethod;
 extern const char *type_nsds5ReplicaBootstrapTransportInfo;
 extern const char *type_replicaKeepAliveUpdateInterval;
+extern const char *type_nsds5ReplicaLastInitStart;
+extern const char *type_nsds5ReplicaLastInitEnd;
+extern const char *type_nsds5ReplicaLastInitStatus;
 
 /* Attribute names for windows replication agreements */
 extern const char *type_nsds7WindowsReplicaArea;
@@ -275,6 +279,7 @@ int multisupplier_extop_cleanruv(Slapi_PBlock *pb);
 int multisupplier_extop_abort_cleanruv(Slapi_PBlock *pb);
 int multisupplier_extop_cleanruv_get_maxcsn(Slapi_PBlock *pb);
 int multisupplier_extop_cleanruv_check_status(Slapi_PBlock *pb);
+bool check_replica_acquired(Slapi_PBlock *pb);
 int extop_noop(Slapi_PBlock *pb);
 struct berval *NSDS50StartReplicationRequest_new(const char *protocol_oid,
                                                  const char *repl_root,
@@ -429,12 +434,15 @@ int agmt_set_transportinfo_from_entry(Repl_Agmt *ra, const Slapi_Entry *e, PRBoo
 int agmt_set_port_from_entry(Repl_Agmt *ra, const Slapi_Entry *e);
 int agmt_set_host_from_entry(Repl_Agmt *ra, const Slapi_Entry *e);
 const char *agmt_get_long_name(const Repl_Agmt *ra);
+void agmt_set_session_id(Repl_Agmt *ra);
+char *agmt_get_session_id(Repl_Agmt *ra);
 int agmt_initialize_replica(const Repl_Agmt *agmt);
 void agmt_replica_init_done(const Repl_Agmt *agmt);
 void agmt_notify_change(Repl_Agmt *ra, Slapi_PBlock *pb);
 Object *agmt_get_consumer_ruv(Repl_Agmt *ra);
 ReplicaId agmt_get_consumer_rid(Repl_Agmt *ra, void *conn);
 int agmt_set_consumer_ruv(Repl_Agmt *ra, RUV *ruv);
+void agmt_update_init_status(Repl_Agmt *ra);
 void agmt_update_consumer_ruv(Repl_Agmt *ra);
 CSN *agmt_get_consumer_schema_csn(Repl_Agmt *ra);
 void agmt_set_consumer_schema_csn(Repl_Agmt *ra, CSN *csn);
@@ -629,6 +637,7 @@ void conn_set_agmt_changed(Repl_Connection *conn);
 ConnResult conn_read_result(Repl_Connection *conn, int *message_id);
 ConnResult conn_read_result_ex(Repl_Connection *conn, char **retoidp, struct berval **retdatap, LDAPControl ***returned_controls, int send_msgid, int *resp_msgid, int noblock);
 LDAP *conn_get_ldap(Repl_Connection *conn);
+const Repl_Agmt *conn_get_agmt(Repl_Connection *conn);
 void conn_lock(Repl_Connection *conn);
 void conn_unlock(Repl_Connection *conn);
 void conn_delete_internal_ext(Repl_Connection *conn);
@@ -706,6 +715,9 @@ PRBool replica_is_updatedn(Replica *r, const Slapi_DN *sdn);
 void replica_set_updatedn(Replica *r, const Slapi_ValueSet *vs, int mod_op);
 void replica_set_groupdn(Replica *r, const Slapi_ValueSet *vs, int mod_op);
 char *replica_get_generation(const Replica *r);
+bool replica_check_validity(Replica *replica);
+int replica_get_port(Replica *r);
+int replica_get_secure_port(Replica *r);
 
 /* currently supported flags */
 #define REPLICA_LOG_CHANGES 0x1 /* enable change logging */
@@ -735,6 +747,7 @@ int replica_update_csngen_state_ext(Replica *r, const RUV *ruv, const CSN *extra
 CSN *replica_get_purge_csn(const Replica *r);
 int replica_log_ruv_elements(const Replica *r);
 void replica_enumerate_replicas(FNEnumReplica fn, void *arg);
+void replica_config_enumerate_replicas(FNEnumReplica fn, void *arg);
 int replica_reload_ruv(Replica *r);
 int replica_check_for_data_reload(Replica *r, void *arg);
 /* the functions below manipulate replica dn hash */
@@ -826,13 +839,6 @@ typedef struct _cleanruv_data
     char *force;
     PRBool original_task;
 } cleanruv_data;
-
-typedef struct _cleanruv_purge_data
-{
-    int cleaned_rid;
-    const Slapi_DN *suffix_sdn;
-    Replica *replica;
-} cleanruv_purge_data;
 
 typedef struct _csngen_test_data
 {
@@ -927,5 +933,6 @@ void cleanruv_log(Slapi_Task *task, int rid, char *task_type, int sev_level, cha
 char *replica_cleanallruv_get_local_maxcsn(ReplicaId rid, char *base_dn);
 int replica_execute_cleanruv_task(Replica *r, ReplicaId rid, char *returntext);
 int replica_execute_cleanall_ruv_task(Replica *r, ReplicaId rid, Slapi_Task *task, const char *force_cleaning, PRBool original_task, char *returntext);
+void delete_cleaned_rid_config(cleanruv_data *data);
 
 #endif /* _REPL5_H_ */

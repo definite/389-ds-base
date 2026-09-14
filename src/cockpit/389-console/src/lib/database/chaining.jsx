@@ -1,36 +1,34 @@
 import cockpit from "cockpit";
 import React from "react";
 import { DoubleConfirmModal } from "../notifications.jsx";
-import { log_cmd, callCmdStreamPassword } from "../tools.jsx";
+import { log_cmd, callCmdStreamPassword, getApiErrorMessage } from "../tools.jsx";
 import {
-    Button,
-    Checkbox,
-    ExpandableSection,
-    Form,
-    Grid,
-    GridItem,
-    Modal,
-    ModalVariant,
-    Select,
-    SelectOption,
-    SelectVariant,
-    SimpleList,
-    SimpleListItem,
-    Tab,
-    Tabs,
-    TabTitleText,
-    TextInput,
-    Text,
-    TextContent,
-    TextVariants,
-    ValidatedOptions,
-} from "@patternfly/react-core";
+	Button,
+	Checkbox,
+	ExpandableSection,
+	Form,
+	Grid,
+	GridItem,
+	Modal,
+	ModalVariant,
+	SimpleList,
+	SimpleListItem,
+	Tab,
+	Tabs,
+	TabTitleText,
+	TextInput,
+	Text,
+	TextContent,
+	TextVariants,
+	ValidatedOptions
+} from '@patternfly/react-core';
+import TypeaheadSelect from "../../dsBasicComponents.jsx";
+import { DsNumberInput, INT32_MAX } from "../dsNumberInput.jsx";
 import PropTypes from "prop-types";
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-    faLink,
-    faSyncAlt
-} from '@fortawesome/free-solid-svg-icons';
+    SyncAltIcon,
+    LinkIcon
+} from '@patternfly/react-icons';
 
 const _ = cockpit.gettext;
 
@@ -100,7 +98,7 @@ export class ChainingDatabaseConfig extends React.Component {
             _defUseStartTLS: this.props.data.defUseStartTLS,
         };
 
-        this.handleToggle = (isExpanded) => {
+        this.handleToggle = (_event, isExpanded) => {
             this.setState({
                 isExpanded
             });
@@ -263,7 +261,7 @@ export class ChainingDatabaseConfig extends React.Component {
             });
             log_cmd("handleSaveChainingConfig", "Applying default chaining config change", cmd);
             cockpit
-                    .spawn(cmd, { superuser: true, err: "message" })
+                    .spawn(cmd, { superuser: "require", err: "message" })
                     .done(content => {
                         // Continue with the next mod
                         this.props.reload();
@@ -276,11 +274,11 @@ export class ChainingDatabaseConfig extends React.Component {
                         });
                     })
                     .fail(err => {
-                        const errMsg = JSON.parse(err);
+                        const errMsg = getApiErrorMessage(err);
                         this.props.reload();
                         this.props.addNotification(
                             "error",
-                            cockpit.format(_("Error updating chaining configuration - $0"), errMsg.desc)
+                            cockpit.format(_("Error updating chaining configuration - $0"), errMsg)
                         );
                         this.setState({
                             saving: false
@@ -330,7 +328,7 @@ export class ChainingDatabaseConfig extends React.Component {
 
         log_cmd("saveOids", "Save new chaining OID controls", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.closeOidModal();
                     this.props.reload(1);
@@ -343,7 +341,7 @@ export class ChainingDatabaseConfig extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.setState({
                         modalSpinning: false,
                     });
@@ -351,7 +349,7 @@ export class ChainingDatabaseConfig extends React.Component {
                     this.props.reload(1);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error updating chaining controls - $0,"), errMsg.desc)
+                        cockpit.format(_("Error updating chaining controls - $0,"), errMsg)
                     );
                 });
     }
@@ -380,7 +378,7 @@ export class ChainingDatabaseConfig extends React.Component {
 
         log_cmd("deleteOids", "Delete chaining control oid", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.reload(1);
                     this.props.addNotification(
@@ -389,11 +387,11 @@ export class ChainingDatabaseConfig extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.reload();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error removing chaining controls - $0"), errMsg.desc)
+                        cockpit.format(_("Error removing chaining controls - $0"), errMsg)
                     );
                 });
     }
@@ -449,7 +447,7 @@ export class ChainingDatabaseConfig extends React.Component {
 
         log_cmd("saveComps", "Save new chaining components", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.closeCompsModal();
                     this.props.reload(1);
@@ -462,7 +460,7 @@ export class ChainingDatabaseConfig extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.closeCompsModal();
                     this.props.reload();
                     this.setState({
@@ -470,7 +468,7 @@ export class ChainingDatabaseConfig extends React.Component {
                     });
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error updating chaining components - $0"), errMsg.desc)
+                        cockpit.format(_("Error updating chaining components - $0"), errMsg)
                     );
                 });
     }
@@ -490,7 +488,7 @@ export class ChainingDatabaseConfig extends React.Component {
 
         log_cmd("deleteComps", "Delete chaining components", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.reload(1);
                     this.props.addNotification(
@@ -499,11 +497,11 @@ export class ChainingDatabaseConfig extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.reload();
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error removing chaining components - $0"), errMsg.desc)
+                        cockpit.format(_("Error removing chaining components - $0"), errMsg)
                     );
                 });
     }
@@ -563,226 +561,174 @@ export class ChainingDatabaseConfig extends React.Component {
         return (
             <div id="chaining-page" className={this.state.saving ? "ds-disabled" : ""}>
                 <TextContent>
-                    <Text className="ds-config-header" component={TextVariants.h2}>{_("Database Chaining Settings")}</Text>
+                    <Text component={TextVariants.h3}>
+                        {_("Database Chaining Settings")}
+                    </Text>
                 </TextContent>
-                <Tabs className="ds-margin-top-xlg" activeKey={this.state.activeTabKey} onSelect={this.handleNavSelect}>
+                <Tabs className="ds-margin-top-lg" activeKey={this.state.activeTabKey} onSelect={this.handleNavSelect}>
                     <Tab eventKey={0} title={<TabTitleText>{_("Default Creation Settings")}</TabTitleText>}>
                         <div className="ds-indent ds-margin-bottom-md">
-                            <Grid
-                                title={_("The size limit of entries returned over a database link (nsslapd-sizelimit).")}
-                                className="ds-margin-top-xlg"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                            <Grid className="ds-margin-top-xlg">
+                                <GridItem className="ds-label" span={2} title={_("The size limit of entries returned over a database link (nsslapd-sizelimit).")}>
                                     {_("Size Limit")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defSizeLimit}
-                                        type="number"
                                         id="defSizeLimit"
-                                        aria-describedby="defSizeLimit"
-                                        name="defSizeLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
-                            </Grid>
-                            <Grid
-                                title={_("The maximum number of operations per connections. (nsconcurrentoperationslimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                                <GridItem className="ds-label" offset={5} span={2} title={_("The maximum number of operations per connections. (nsconcurrentoperationslimit).")}>
                                     {_("Max Operations Per Conn")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defConcurOpLimit}
-                                        type="number"
                                         id="defConcurOpLimit"
-                                        aria-describedby="defConcurOpLimit"
-                                        name="defConcurOpLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
                             </Grid>
-                            <Grid
-                                title={_("The time limit of an operation over a database link (nsslapd-timelimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                            <Grid className="ds-margin-top">
+                                <GridItem className="ds-label" span={2} title={_("The time limit of an operation over a database link (nsslapd-timelimit).")}>
                                     {_("Time Limit")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defTimeLimit}
-                                        type="number"
                                         id="defTimeLimit"
-                                        aria-describedby="defTimeLimit"
-                                        name="defTimeLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
-                            </Grid>
-                            <Grid
-                                title={_("The maximum number of operations per connections. (nsconcurrentoperationslimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                                <GridItem className="ds-label" offset={5} span={2} title={_("The maximum number of operations per connections. (nsconcurrentoperationslimit).")}>
                                     {_("Connection Lifetime")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defConnLife}
-                                        type="number"
                                         id="defConnLife"
-                                        aria-describedby="defConnLife"
-                                        name="defConnLife"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
                             </Grid>
-                            <Grid
-                                title={_("The maximum number of TCP connections the database link establishes with the remote server.  (nsbindconnectionslimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                            <Grid className="ds-margin-top">
+                                <GridItem className="ds-label" span={2} title={_("The maximum number of TCP connections the database link establishes with the remote server.  (nsbindconnectionslimit).")}>
                                     {_("Max TCP Connections")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defBindConnLimit}
-                                        type="number"
                                         id="defBindConnLimit"
-                                        aria-describedby="defBindConnLimit"
-                                        name="defBindConnLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
-                            </Grid>
-                            <Grid
-                                title={_("The maximum number of connections allowed over the database link.  (nsoperationconnectionslimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                                <GridItem className="ds-label" offset={5} span={2} title={_("The maximum number of connections allowed over the database link.  (nsoperationconnectionslimit).")}>
                                     {_("Max LDAP Connections")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defOpConnLimit}
-                                        type="number"
                                         id="defOpConnLimit"
-                                        aria-describedby="defOpConnLimit"
-                                        name="defOpConnLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
                             </Grid>
-                            <Grid
-                                title={_("The number of seconds that pass before the server checks for abandoned operations.  (nsabandonedsearchcheckinterval).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                            <Grid className="ds-margin-top">
+                                <GridItem className="ds-label" span={2} title={_("The number of seconds that pass before the server checks for abandoned operations.  (nsabandonedsearchcheckinterval).")}>
                                     {_("Abandoned Op Check Interval")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defSearchCheck}
-                                        type="number"
                                         id="defSearchCheck"
-                                        aria-describedby="defSearchCheck"
-                                        name="defSearchCheck"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
-                            </Grid>
-                            <Grid
-                                title={_("The maximum number of connections allowed over the database link.  (nsoperationconnectionslimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                                <GridItem className="ds-label" offset={5} span={2} title={_("The maximum number of connections allowed over the database link.  (nsoperationconnectionslimit).")}>
                                     {_("Max Binds Per Connection")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defConcurLimit}
-                                        type="number"
                                         id="defConcurLimit"
-                                        aria-describedby="defConcurLimit"
-                                        name="defConcurLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
                             </Grid>
-                            <Grid
-                                title={_("The maximum number of times a request can be forwarded from one database link to another.  (nshoplimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                            <Grid className="ds-margin-top">
+                                <GridItem className="ds-label" span={2} title={_("The maximum number of times a request can be forwarded from one database link to another.  (nshoplimit).")}>
                                     {_("Database Link Hop Limit")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defHopLimit}
-                                        type="number"
                                         id="defHopLimit"
-                                        aria-describedby="defHopLimit"
-                                        name="defHopLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
-                            </Grid>
-                            <Grid
-                                title={_("The amount of time before the bind attempt times out. (nsbindtimeout).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                                <GridItem className="ds-label" offset={5} span={2} title={_("The amount of time before the bind attempt times out. (nsbindtimeout).")}>
                                     {_("Bind Timeout")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defBindTimeout}
-                                        type="number"
                                         id="defBindTimeout"
-                                        aria-describedby="defBindTimeout"
-                                        name="defBindTimeout"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
                                 </GridItem>
                             </Grid>
-                            <Grid
-                                title={_("The number of times the database link tries to bind with the remote server after a connection failure. (nsbindretrylimit).")}
-                                className="ds-margin-top"
-                            >
-                                <GridItem className="ds-label" span={3}>
+                            <Grid className="ds-margin-top">
+                                <GridItem className="ds-label" span={2} title={_("The number of times the database link tries to bind with the remote server after a connection failure. (nsbindretrylimit).")}>
                                     {_("Bind Retry Limit")}
                                 </GridItem>
-                                <GridItem span={9}>
-                                    <TextInput
+                                <GridItem span={1}>
+                                    <DsNumberInput
                                         value={this.state.defBindRetryLimit}
-                                        type="number"
                                         id="defBindRetryLimit"
-                                        aria-describedby="defBindRetryLimit"
-                                        name="defBindRetryLimit"
-                                        onChange={(str, e) => {
+                                        min={-1}
+                                        max={INT32_MAX}
+                                        onChange={(e) => {
                                             this.handleChange(e);
                                         }}
                                     />
@@ -797,7 +743,7 @@ export class ChainingDatabaseConfig extends React.Component {
                                         label={_("Check Local ACIs")}
                                         id="defCheckAci"
                                         isChecked={this.state.defCheckAci}
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handleChange(e);
                                         }}
                                         aria-label="check aci"
@@ -813,7 +759,7 @@ export class ChainingDatabaseConfig extends React.Component {
                                         label={_("Send Referral On Scoped Search")}
                                         id="defRefOnScoped"
                                         isChecked={this.state.defRefOnScoped}
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handleChange(e);
                                         }}
                                         aria-label="send ref"
@@ -829,7 +775,7 @@ export class ChainingDatabaseConfig extends React.Component {
                                         label={_("Allow Proxied Authentication")}
                                         id="defProxy"
                                         isChecked={this.state.defProxy}
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handleChange(e);
                                         }}
                                         aria-label="prox auth"
@@ -845,7 +791,7 @@ export class ChainingDatabaseConfig extends React.Component {
                                         label={_("Use StartTLS")}
                                         id="defUseStartTLS"
                                         isChecked={this.state.defUseStartTLS}
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handleChange(e);
                                         }}
                                         aria-label="startTLS"
@@ -1054,7 +1000,7 @@ export class ChainingConfig extends React.Component {
             };
         }
 
-        this.handleSelectToggle = isOpen => {
+        this.handleSelectToggle = (_event, isOpen) => {
             this.setState({
                 isOpen
             });
@@ -1325,7 +1271,7 @@ export class ChainingConfig extends React.Component {
         ];
         log_cmd("deleteLink", "Delete database chaining link", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     this.props.loadSuffixTree(true);
                     this.props.addNotification(
@@ -1334,11 +1280,11 @@ export class ChainingConfig extends React.Component {
                     );
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.loadSuffixTree(true);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Failed to delete database link - $0"), errMsg.desc)
+                        cockpit.format(_("Failed to delete database link - $0"), errMsg)
                     );
                 });
     }
@@ -1357,14 +1303,15 @@ export class ChainingConfig extends React.Component {
                     <GridItem span={10} className="ds-word-wrap">
                         <TextContent>
                             <Text className="ds-suffix-header" component={TextVariants.h3}>
-                                <FontAwesomeIcon size="sm" icon={faLink} /> {this.props.suffix} (<i><font size="3">{this.props.bename}</font></i>)
-                                <FontAwesomeIcon
-                                    size="lg"
-                                    className="ds-left-margin ds-refresh"
-                                    icon={faSyncAlt}
-                                    title={_("Refresh database link")}
+                                <LinkIcon />
+                                &nbsp;&nbsp;{this.props.suffix} (<i>{this.props.bename}</i>)
+                                <Button
+                                    variant="plain"
+                                    aria-label={_("Refresh database link")}
                                     onClick={() => this.props.reload(this.props.suffix)}
-                                />
+                                >
+                                    <SyncAltIcon />
+                                </Button>
                             </Text>
                         </TextContent>
                     </GridItem>
@@ -1393,7 +1340,7 @@ export class ChainingConfig extends React.Component {
                             id="nsfarmserverurl"
                             aria-describedby="nsfarmserverurl"
                             name="nsfarmserverurl"
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.onChange(e);
                             }}
                         />
@@ -1413,7 +1360,7 @@ export class ChainingConfig extends React.Component {
                             id="nsmultiplexorbinddn"
                             aria-describedby="nsmultiplexorbinddn"
                             name="nsmultiplexorbinddn"
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.onChange(e);
                             }}
                         />
@@ -1433,7 +1380,7 @@ export class ChainingConfig extends React.Component {
                             id="nsmultiplexorcredentials"
                             aria-describedby="nsmultiplexorcredentials"
                             name="nsmultiplexorcredentials"
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.onChange(e);
                             }}
                             validated={(error.nsmultiplexorcredentials || !this.state.linkPwdMatch) ? ValidatedOptions.error : ValidatedOptions.default}
@@ -1454,7 +1401,7 @@ export class ChainingConfig extends React.Component {
                             id="nsmultiplexorcredentials_confirm"
                             aria-describedby="nsmultiplexorcredentials_confirm"
                             name="nsmultiplexorcredentials_confirm"
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.onChange(e);
                             }}
                             validated={(error.nsmultiplexorcredentials_confirm || !this.state.linkPwdMatch) ? ValidatedOptions.error : ValidatedOptions.default}
@@ -1469,19 +1416,14 @@ export class ChainingConfig extends React.Component {
                         {_("Bind Method")}
                     </GridItem>
                     <GridItem span={9}>
-                        <Select
-                            variant={SelectVariant.single}
-                            aria-label="Select Input"
-                            onToggle={this.handleSelectToggle}
+                        <TypeaheadSelect
+                            selected={this.state.nsbindmechanism}
                             onSelect={this.handleSelect}
-                            selections={this.state.nsbindmechanism}
+                            options={["Simple", "SASL/DIGEST-MD5", "SASL/GSSAPI"]}
                             isOpen={this.state.isOpen}
-                            aria-labelledby="UID"
-                        >
-                            <SelectOption key="Simple" value="Simple" />
-                            <SelectOption key="SASL/DIGEST-MD5" value="SASL/DIGEST-MD5" />
-                            <SelectOption key="SASL/GSSAPI" value="SASL/GSSAPI" />
-                        </Select>
+                            onToggle={this.handleSelectToggle}
+                            ariaLabel="Select Input"
+                        />
                     </GridItem>
                 </Grid>
                 <Grid
@@ -1493,7 +1435,7 @@ export class ChainingConfig extends React.Component {
                             label={_("Use StartTLS")}
                             id="nsusestarttls"
                             isChecked={this.state.nsusestarttls}
-                            onChange={(str, e) => {
+                            onChange={(e, str) => {
                                 this.onChange(e);
                             }}
                             aria-label="check startTLS"
@@ -1504,7 +1446,7 @@ export class ChainingConfig extends React.Component {
                 <ExpandableSection
                     className="ds-margin-top-xlg"
                     toggleText={this.state.isExpanded ? _("Hide Advanced Settings") : _("Show Advanced Settings")}
-                    onToggle={this.handleToggle}
+                    onToggle={(event, isOpen) => this.handleToggle(event, isOpen)}
                     isExpanded={this.state.isExpanded}
                 >
                     <div className="ds-margin-top ds-margin-left">
@@ -1516,13 +1458,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Size Limit")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.sizelimit}
-                                    type="number"
                                     id="sizelimit"
-                                    aria-describedby="sizelimit"
-                                    name="sizelimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1536,13 +1477,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Time Limit")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.sizelimit}
-                                    type="number"
                                     id="timelimit"
-                                    aria-describedby="timelimit"
-                                    name="timelimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1556,13 +1496,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Max TCP Connections")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.bindconnlimit}
-                                    type="number"
                                     id="bindconnlimit"
-                                    aria-describedby="bindconnlimit"
-                                    name="bindconnlimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1576,13 +1515,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Max LDAP Connections")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.opconnlimit}
-                                    type="number"
                                     id="opconnlimit"
-                                    aria-describedby="opconnlimit"
-                                    name="opconnlimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1596,13 +1534,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Max Binds Per Connection")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.concurrbindlimit}
-                                    type="number"
                                     id="concurrbindlimit"
-                                    aria-describedby="concurrbindlimit"
-                                    name="concurrbindlimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1616,13 +1553,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Bind Timeout")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.bindtimeout}
-                                    type="number"
                                     id="bindtimeout"
-                                    aria-describedby="bindtimeout"
-                                    name="bindtimeout"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1636,13 +1572,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Bind Retry Limit")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.bindtimeout}
-                                    type="number"
                                     id="bindretrylimit"
-                                    aria-describedby="bindretrylimit"
-                                    name="bindretrylimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1656,13 +1591,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Max Operations Per Connection")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.concurroplimit}
-                                    type="number"
                                     id="concurroplimit"
-                                    aria-describedby="concurroplimit"
-                                    name="concurroplimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1676,13 +1610,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Connection Lifetime")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.connlifetime}
-                                    type="number"
                                     id="connlifetime"
-                                    aria-describedby="connlifetime"
-                                    name="connlifetime"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1696,13 +1629,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Abandoned Op Check Interval")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.searchcheckinterval}
-                                    type="number"
                                     id="searchcheckinterval"
-                                    aria-describedby="searchcheckinterval"
-                                    name="searchcheckinterval"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1716,13 +1648,12 @@ export class ChainingConfig extends React.Component {
                                 {_("Hop Limit")}
                             </GridItem>
                             <GridItem span={9}>
-                                <TextInput
+                                <DsNumberInput
                                     value={this.state.hoplimit}
-                                    type="number"
                                     id="hoplimit"
-                                    aria-describedby="hoplimit"
-                                    name="hoplimit"
-                                    onChange={(str, e) => {
+                                    min={-1}
+                                    max={INT32_MAX}
+                                    onChange={(e) => {
                                         this.onChange(e);
                                     }}
                                 />
@@ -1737,7 +1668,7 @@ export class ChainingConfig extends React.Component {
                                     label={_("Allow Proxied Authentication")}
                                     id="nsproxiedauthorization"
                                     isChecked={this.state.nsproxiedauthorization}
-                                    onChange={(str, e) => {
+                                    onChange={(e, str) => {
                                         this.onChange(e);
                                     }}
                                     aria-label="send ref"
@@ -1753,7 +1684,7 @@ export class ChainingConfig extends React.Component {
                                     label={_("Check Local ACIs")}
                                     id="nschecklocalaci"
                                     isChecked={this.state.nschecklocalaci}
-                                    onChange={(str, e) => {
+                                    onChange={(e, str) => {
                                         this.onChange(e);
                                     }}
                                     aria-label="send ref"
@@ -1769,7 +1700,7 @@ export class ChainingConfig extends React.Component {
                                     label={_("Send Referral On Scoped Search")}
                                     id="nsreferralonscopedsearch"
                                     isChecked={this.state.nsreferralonscopedsearch}
-                                    onChange={(str, e) => {
+                                    onChange={(e, str) => {
                                         this.onChange(e);
                                     }}
                                     aria-label="send ref"

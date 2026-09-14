@@ -1,16 +1,18 @@
 import cockpit from "cockpit";
 import React from 'react';
 import {
-    Alert,
-    Card,
-    CardBody,
-    CardTitle,
-    ClipboardCopy,
-    ClipboardCopyVariant,
-    Spinner,
-    Switch,
-    Wizard
+	Alert,
+	Card,
+	CardBody,
+	CardTitle,
+	ClipboardCopy,
+	ClipboardCopyVariant,
+	Spinner,
+	Switch
 } from '@patternfly/react-core';
+import {
+	Wizard
+} from '@patternfly/react-core/deprecated';
 import {
     headerCol,
 } from '@patternfly/react-table';
@@ -77,7 +79,9 @@ class DeleteOperationWizard extends React.Component {
                                this.state.numSubordinates,
                                (result) => {
                                    this.setState({
-                                       commandOutput: result.errorCode === 0 ? _("Successfully deleted entry") : _("Failed to delete entry, error: ") + result.errorCode,
+                                       commandOutput: result.errorCode === 0 ?
+                                        _("Successfully deleted entry") :
+                                        _("Failed to delete entry: ") + result.output,
                                        resultVariant: result.errorCode === 0 ? 'success' : 'danger',
                                        deleting: false,
                                    }, () => {
@@ -94,7 +98,7 @@ class DeleteOperationWizard extends React.Component {
             }
         };
 
-        this.handleChangeAck = isAckChecked => {
+        this.handleChangeAck = (_event, isAckChecked) => {
             this.setState({ isAckChecked });
         };
         // End constructor().
@@ -223,7 +227,7 @@ class DeleteOperationWizard extends React.Component {
                                 label={_("Yes, I'm sure.")}
                                 labelOff={_("No, don't delete.")}
                                 isChecked={isAckChecked}
-                                onChange={this.handleChangeAck}
+                                onChange={(event, isChecked) => this.handleChangeAck(event, isChecked)}
                             />
                         </CardBody>
                     </Card>
@@ -232,7 +236,7 @@ class DeleteOperationWizard extends React.Component {
         );
 
         let reviewInfo = '';
-        if (commandOutput === '') {
+        if (commandOutput === '' || commandOutput === "Successfully deleted entry") {
             reviewInfo = numSubordinates > 0
                 ? _("The entries were")
                 : _("The entry was");

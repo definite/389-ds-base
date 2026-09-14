@@ -17,7 +17,7 @@ import {
 import { PassthroughAuthURLsTable } from "./pluginTables.jsx";
 import PluginBasicConfig from "./pluginBasicConfig.jsx";
 import PropTypes from "prop-types";
-import { log_cmd, valid_dn } from "../tools.jsx";
+import { log_cmd, valid_dn, getApiErrorMessage } from "../tools.jsx";
 import { DoubleConfirmModal } from "../notifications.jsx";
 
 const _ = cockpit.gettext;
@@ -210,9 +210,9 @@ class PassthroughAuthentication extends React.Component {
             "list"
         ];
         this.props.toggleLoadingHandler();
-        log_cmd("loadURLs", "Get Passthough Authentication Plugin Configs", cmd);
+        log_cmd("loadURLs", "Get Passthrough Authentication Plugin Configs", cmd);
         cockpit
-                .spawn(cmd, { superuser: true, err: "message" })
+                .spawn(cmd, { superuser: "require", err: "message" })
                 .done(content => {
                     const myObject = JSON.parse(content);
                     const tableKey = this.state.tableKey + 1;
@@ -223,9 +223,9 @@ class PassthroughAuthentication extends React.Component {
                     this.props.toggleLoadingHandler();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     if (err !== 0) {
-                        console.log("loadURLs failed", errMsg.desc);
+                        console.log("loadURLs failed", errMsg);
                     }
                     this.props.toggleLoadingHandler();
                 });
@@ -299,10 +299,10 @@ class PassthroughAuthentication extends React.Component {
             modalSpinning: true
         });
 
-        log_cmd("deleteURL", "Delete the Passthough Authentication Plugin URL entry", cmd);
+        log_cmd("deleteURL", "Delete the Passthrough Authentication Plugin URL entry", cmd);
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -312,10 +312,10 @@ class PassthroughAuthentication extends React.Component {
                     this.closeConfirmDeleteURL();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the URL removal operation - $0"), errMsg.desc)
+                        cockpit.format(_("Error during the URL removal operation - $0"), errMsg)
                     );
                     this.loadURLs();
                     this.closeConfirmDeleteURL();
@@ -367,12 +367,12 @@ class PassthroughAuthentication extends React.Component {
         });
         log_cmd(
             "PassthroughAuthOperation",
-            `Do the ${action} operation on the Passthough Authentication Plugin`,
+            `Do the ${action} operation on the Passthrough Authentication Plugin`,
             cmd
         );
         cockpit
                 .spawn(cmd, {
-                    superuser: true,
+                    superuser: "require",
                     err: "message"
                 })
                 .done(content => {
@@ -385,10 +385,10 @@ class PassthroughAuthentication extends React.Component {
                     this.handleCloseURLModal();
                 })
                 .fail(err => {
-                    const errMsg = JSON.parse(err);
+                    const errMsg = getApiErrorMessage(err);
                     this.props.addNotification(
                         "error",
-                        cockpit.format(_("Error during the URL $0 operation - $1"), action, errMsg.desc)
+                        cockpit.format(_("Error during the URL $0 operation - $1"), action, errMsg)
                     );
                     this.loadURLs();
                     this.handleCloseURLModal();
@@ -500,7 +500,7 @@ class PassthroughAuthentication extends React.Component {
                                 <FormSelect
                                     id="urlConnType"
                                     value={urlConnType}
-                                    onChange={(value, event) => {
+                                    onChange={(event, value) => {
                                         this.handlePassthruChange(event);
                                     }}
                                     aria-label="FormSelect Input"
@@ -522,7 +522,7 @@ class PassthroughAuthentication extends React.Component {
                                         id={content.id}
                                         aria-describedby="horizontal-form-name-helper"
                                         name={content.name}
-                                        onChange={(str, e) => {
+                                        onChange={(e, str) => {
                                             this.handlePassthruChange(e);
                                         }}
                                         validated={error[content.id] ? ValidatedOptions.error : ValidatedOptions.default}
@@ -564,7 +564,7 @@ class PassthroughAuthentication extends React.Component {
                                 <FormSelect
                                     id="urlLDVer"
                                     value={urlLDVer}
-                                    onChange={(value, event) => {
+                                    onChange={(event, value) => {
                                         this.handlePassthruChange(event);
                                     }}
                                     aria-label="FormSelect Input"
@@ -579,7 +579,7 @@ class PassthroughAuthentication extends React.Component {
                                 <Checkbox
                                     id="urlStartTLS"
                                     isChecked={urlStartTLS}
-                                    onChange={(checked, e) => { this.handlePassthruChange(e) }}
+                                    onChange={(e, checked) => { this.handlePassthruChange(e) }}
                                     title={_("A flag of whether to use Start TLS for the connection to the authenticating directory. Start TLS establishes a secure connection over the standard port, so it is useful for connecting using LDAP instead of LDAPS. The TLS server and CA certificates need to be available on both of the servers. To use Start TLS, the LDAP URL must use ldap:, not ldaps:.")}
                                     label={_("Enable StartTLS")}
                                 />
@@ -623,6 +623,7 @@ class PassthroughAuthentication extends React.Component {
                         <Button
                             variant="primary"
                             onClick={this.handleShowAddURLModal}
+                            className="ds-margin-top"
                         >
                             {_("Add URL")}
                         </Button>

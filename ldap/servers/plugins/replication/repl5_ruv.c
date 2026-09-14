@@ -972,7 +972,7 @@ ruv_get_min_csn_ext(const RUV *ruv, CSN **csn, int ignore_cleaned_rid)
 }
 
 int
-ruv_enumerate_elements(const RUV *ruv, FNEnumRUV fn, void *arg)
+ruv_enumerate_elements(const RUV *ruv, FNEnumRUV fn, void *arg, int all_elements)
 {
     int cookie;
     RUVElement *elem;
@@ -987,8 +987,12 @@ ruv_enumerate_elements(const RUV *ruv, FNEnumRUV fn, void *arg)
     slapi_rwlock_rdlock(ruv->lock);
     for (elem = (RUVElement *)dl_get_first(ruv->elements, &cookie); elem;
          elem = (RUVElement *)dl_get_next(ruv->elements, &cookie)) {
-        /* we only return elements that contains both minimal and maximal CSNs */
-        if (elem->csn && elem->min_csn) {
+        /*
+         * Either we return all elements or
+         * only those that contains both minimal and maximal CSNs
+         */
+        if (all_elements || (elem->csn && elem->min_csn)) {
+            enum_data.rid = elem->rid;
             enum_data.csn = elem->csn;
             enum_data.min_csn = elem->min_csn;
             rc = fn(&enum_data, arg);
@@ -1983,6 +1987,12 @@ get_ruvelement_from_berval(const struct berval *bval)
         /* replica id must be here */
         i = 0;
         while (isdigit(bval->bv_val[urlbegin])) {
+            if (i >= RIDSTR_SIZE - 1) {
+                /* An authenticated RA is sending an invalid replica id */
+                slapi_log_err(SLAPI_LOG_WARNING, repl_plugin_name,
+                              "get_ruvelement_from_berval - Replica ID too long\n");
+                goto loser;
+            }
             ridbuff[i] = bval->bv_val[urlbegin];
             i++;
             urlbegin++;

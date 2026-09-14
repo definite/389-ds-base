@@ -23,6 +23,8 @@
 #include "secmod.h"
 #include <string.h>
 #include <errno.h>
+#include <private/pprio.h>
+
 
 #define NEED_TOK_PBE /* defines tokPBE and ptokPBE - see slap.h */
 #include "slap.h"
@@ -74,6 +76,10 @@ static char *internalTokenName = "Internal (Software) Token";
 static int stimeout;
 static char *ciphers = NULL;
 static char *configDN = "cn=encryption,cn=config";
+
+/* The paths of extracted key and certs if any. */
+static char *key_extract_file = NULL;
+static char *cert_extract_file = NULL;
 
 
 /* Copied from libadmin/libadmin.h public/nsapi.h */
@@ -162,6 +168,20 @@ PRBool enableTLS1 = PR_TRUE;
 #define PEMEXT ".pem"
 /* CA cert pem file */
 static char *CACertPemFile = NULL;
+
+static const struct {
+    KeyType kt;
+    const char *shortname;
+    const char *fullname;
+} supported_key_types[] = {
+    { rsaKey, "RSA", "Rivest–Shamir–Adleman" },
+    { ecKey, "EC", "Elliptic Curve" },
+#ifdef MAX_ML_DSA_PRIVATE_KEY_LEN
+    { mldsaKey, "ML-DSA", "Module-Lattice-Based Digital Signature Algorithm (post-quantum)" },
+#endif
+    { 0 }
+};
+
 
 /* helper functions for openldap update. */
 static int slapd_extract_cert(Slapi_Entry *entry, int isCA);
@@ -712,9 +732,25 @@ SSLPLCY_Install(void)
 {
 
     SECStatus s = 0;
+    int flags = NSS_USE_ALG_IN_SIGNATURE | NSS_USE_ALG_IN_SSL;
+    SECOidData *oid = NULL;
 
     s = NSS_SetDomesticPolicy();
 
+    /* Should rely on the crypto module policy in FIPS mode */
+    if (!slapd_pk11_isFIPS()) {
+        /* Set explicitly PQC algorithm policy if it is not set by default */
+        for (SECOidTag tag = 1; s == SECSuccess && (oid = SECOID_FindOIDByTag(tag)) != NULL; tag++) {
+            if (oid->mechanism != CKM_INVALID_MECHANISM &&
+                PL_strncasecmp(oid->desc, "ML-DSA-", 7) == 0) {
+                PRUint32 oflags = 0;
+                (void) NSS_GetAlgorithmPolicy(tag, &oflags);
+                if ((oflags & flags) != flags) {
+                    s = NSS_SetAlgorithmPolicy(tag, flags, 0);
+                }
+            }
+        }
+    }
     return s ? PR_FAILURE : PR_SUCCESS;
 }
 
@@ -962,9 +998,12 @@ check_private_certdir()
 
     if (!tmp_private) {
         /* tmp is not a private name space */
-        slapi_log_err(SLAPI_LOG_WARNING, "Security Initialization",
+        if (_security_library_initialized == 0) {
+            /* only alert about this the first time around */
+            slapi_log_err(SLAPI_LOG_WARNING, "Security Initialization",
                 "%s is not a private namespace. pem files not exported there\n",
                 private_mountpoint);
+        }
         return NULL;
     }
 
@@ -1012,7 +1051,6 @@ slapd_nss_init(int init_ssl __attribute__((unused)), int config_available __attr
     int rv = 0;
     int len = 0;
     int create_certdb = 0;
-    PRUint32 nssFlags = 0;
     char *certdir;
     char dmin[VERSION_STR_LENGTH], dmax[VERSION_STR_LENGTH];
     char smin[VERSION_STR_LENGTH], smax[VERSION_STR_LENGTH];
@@ -1038,10 +1076,16 @@ slapd_nss_init(int init_ssl __attribute__((unused)), int config_available __attr
        certdir is the path where the NSS database is located
      */
     certdir = config_get_certdir();
+    if (certdir == NULL || *certdir == '\0') {
+        slapi_log_err(SLAPI_LOG_ERR, "Security Initialization",
+                      "slapd_nss_init - Certificate directory is not configured");
+        slapi_ch_free_string(&certdir);
+        return -1;
+    }
 
     /* make sure path does not end in the path separator character */
     len = strlen(certdir);
-    if (certdir[len - 1] == '/' || certdir[len - 1] == '\\') {
+    if (len > 1 && (certdir[len - 1] == '/' || certdir[len - 1] == '\\')) {
         certdir[len - 1] = '\0';
     }
 
@@ -1072,9 +1116,8 @@ slapd_nss_init(int init_ssl __attribute__((unused)), int config_available __attr
 
     /******** Initialise NSS *********/
 
-    nssFlags &= (~NSS_INIT_READONLY);
     slapd_pk11_configurePKCS11(NULL, NULL, tokPBE, ptokPBE, NULL, NULL, NULL, NULL, 0, 0);
-    secStatus = NSS_Initialize(certdir, NULL, NULL, "secmod.db", nssFlags);
+    secStatus = NSS_InitReadWrite(certdir);
 
     dongle_file_name = slapi_ch_smprintf("%s/pin.txt", certdir);
 
@@ -1321,7 +1364,8 @@ slapd_ssl_init()
                 slapi_ch_free((void **)&token);
                 return -1;
             }
-            if (config_get_extract_pem()) {
+            /* Only extract the keys/cert *once* */
+            if (config_get_extract_pem() && _security_library_initialized == 0) {
                 /* Get Server{Key,Cert}ExtractFile from cn=Cipher,cn=encryption entry if any. */
                 slapd_extract_cert(entry, PR_FALSE);
                 slapd_extract_key(entry, isinternal ? internalTokenName : token, slot);
@@ -1339,6 +1383,13 @@ slapd_ssl_init()
     _security_library_initialized = 1;
 
     return 0;
+}
+
+void
+slapd_ssl_destroy(void)
+{
+    slapi_ch_free_string(&key_extract_file);
+    slapi_ch_free_string(&cert_extract_file);
 }
 
 /*
@@ -1520,7 +1571,6 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
     int slapd_SSLclientAuth;
     char *tmpDir;
     Slapi_Entry *e = NULL;
-    PRBool fipsMode = PR_FALSE;
     PRUint16 NSSVersionMin = defaultNSSVersions.min;
     PRUint16 NSSVersionMax = defaultNSSVersions.max;
     char mymin[VERSION_STR_LENGTH], mymax[VERSION_STR_LENGTH];
@@ -1587,6 +1637,7 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
     }
 
     (*fd) = pr_sock;
+    dyncerts_register_socket(PR_FileDesc2NativeHandle(sock), pr_sock);
 
     /* Step / Three.6 /
      *  - If in FIPS mode, authenticate to the token before
@@ -1609,7 +1660,6 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
                               errorCode, slapd_pr_strerror(errorCode));
                 return -1;
             }
-            fipsMode = PR_TRUE;
         }
 
         slapd_pk11_setSlotPWValues(slot, 0, 0);
@@ -1618,7 +1668,7 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
     /*
      * Now, get the complete list of cipher families. Each family
      * has a token name and personality name which we'll use to find
-     * appropriate keys and certs, and call SSL_ConfigSecureServer
+     * appropriate keys and certs, and call SSL_ConfigServerCert
      * with.
      */
 
@@ -1737,8 +1787,6 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
                 }
 
                 if (SECSuccess == rv) {
-                    SSLKEAType certKEA;
-
                     /* If we want weak dh params, flag it on the socket now! */
                     rv = SSL_OptionSet(*fd, SSL_ENABLE_SERVER_DHE, PR_TRUE);
                     if (rv != SECSuccess) {
@@ -1752,11 +1800,10 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
                         }
                     }
 
-                    certKEA = NSS_FindCertKEAType(cert);
-                    rv = SSL_ConfigSecureServer(*fd, cert, key, certKEA);
+                    rv = SSL_ConfigServerCert(*fd, cert, key, NULL, 0);
                     if (SECSuccess != rv) {
                         errorCode = PR_GetError();
-                        slapd_SSL_warn("ConfigSecureServer: "
+                        slapd_SSL_warn("SSL_ConfigServerCert: "
                                        "Server key/certificate is "
                                        "bad for cert %s of family %s (" SLAPI_COMPONENT_NAME_NSPR " error %d - %s)",
                                        cert_name, *family, errorCode,
@@ -1914,14 +1961,6 @@ slapd_ssl_init2(PRFileDesc **fd, int startTLS)
      */
     sslStatus = SSL_VersionRangeGet(pr_sock, &slapdNSSVersions);
     if (sslStatus == SECSuccess) {
-        if (slapdNSSVersions.max > LDAP_OPT_X_TLS_PROTOCOL_TLS1_2 && fipsMode) {
-            /*
-             * FIPS & NSS currently only support a max version of TLS1.2
-             * (although NSS advertises 1.3 as a max range in FIPS mode),
-             * hopefully this code block can be removed soon...
-             */
-            slapdNSSVersions.max = LDAP_OPT_X_TLS_PROTOCOL_TLS1_2;
-        }
         /* Reset request range */
         sslStatus = SSL_VersionRangeSet(pr_sock, &slapdNSSVersions);
         if (sslStatus == SECSuccess) {
@@ -2063,8 +2102,6 @@ slapd_SSL_client_auth(LDAP *ld)
     SVRCOREStdPinObj *StdPinObj;
     SVRCOREError err = SVRCORE_Success;
     char *finalpersonality = NULL;
-    char *CertExtractFile = NULL;
-    char *KeyExtractFile = NULL;
 
     if ((family_list = getChildren(configDN))) {
         char **family;
@@ -2169,11 +2206,6 @@ slapd_SSL_client_auth(LDAP *ld)
             slapi_ch_free_string(&finalpersonality);
             finalpersonality = personality;
             slapi_ch_free_string(&cipher);
-            /* Get ServerCert/KeyExtractFile from given entry if any. */
-            slapi_ch_free_string(&CertExtractFile);
-            CertExtractFile = slapi_entry_attr_get_charptr(entry, "ServerCertExtractFile");
-            slapi_ch_free_string(&KeyExtractFile);
-            KeyExtractFile = slapi_entry_attr_get_charptr(entry, "ServerKeyExtractFile");
             freeConfigEntry(&entry);
         } /* end of for */
 
@@ -2191,37 +2223,12 @@ slapd_SSL_client_auth(LDAP *ld)
                            "(no password). (" SLAPI_COMPONENT_NAME_NSPR " error %d - %s)",
                            errorCode, slapd_pr_strerror(errorCode));
         } else {
-            if (slapi_client_uses_non_nss(ld)  && config_get_extract_pem()) {
-                char *certdir;
-                char *keyfile = NULL;
-                char *certfile = NULL;
+            if (slapi_client_uses_non_nss(ld)  && key_extract_file != NULL && cert_extract_file != NULL) {
+                char *keyfile = slapi_ch_strdup(key_extract_file);
+                char *certfile = slapi_ch_strdup(cert_extract_file);
                 /* If a private tmp namespace exists
                  * it is the place where PEM files will be extracted
                  */
-                if ((certdir = check_private_certdir()) == NULL) {
-                    certdir = config_get_certdir();
-                }
-                if (KeyExtractFile) {
-                    if ('/' == *KeyExtractFile) {
-                        keyfile = KeyExtractFile;
-                    } else {
-                        keyfile = slapi_ch_smprintf("%s/%s", certdir, KeyExtractFile);
-                        slapi_ch_free_string(&KeyExtractFile);
-                    }
-                } else {
-                    keyfile = slapi_ch_smprintf("%s/%s-Key%s", certdir, finalpersonality, PEMEXT);
-                }
-                if (CertExtractFile) {
-                    if ('/' == *CertExtractFile) {
-                        certfile = CertExtractFile;
-                    } else {
-                        certfile = slapi_ch_smprintf("%s/%s", certdir, CertExtractFile);
-                        slapi_ch_free_string(&CertExtractFile);
-                    }
-                } else {
-                    certfile = slapi_ch_smprintf("%s/%s%s", certdir, finalpersonality, PEMEXT);
-                }
-                slapi_ch_free_string(&certdir);
                 if (PR_SUCCESS != PR_Access(keyfile, PR_ACCESS_EXISTS)) {
                     slapi_ch_free_string(&keyfile);
                     slapd_SSL_warn("SSL key file (%s) for client authentication does not exist. "
@@ -2254,6 +2261,10 @@ slapd_SSL_client_auth(LDAP *ld)
                     slapi_ch_free_string(&certfile);
                 }
             } else {
+                if (config_get_extract_pem() && (key_extract_file == NULL || cert_extract_file == NULL)) {
+                    slapd_SSL_warn("SSL key or certificate file were not extracted during initialisation.");
+                }
+
                 rc = ldap_set_option(ld, LDAP_OPT_X_TLS_KEYFILE, SERVER_KEY_NAME);
                 if (rc) {
                     slapd_SSL_warn("SSL client authentication cannot be used "
@@ -2659,6 +2670,10 @@ slapd_extract_cert(Slapi_Entry *entry, int isCA)
         }
     }
     rv = SECSuccess;
+
+    slapi_ch_free_string(&cert_extract_file);
+    cert_extract_file = slapi_ch_strdup(certfile);
+
 bail:
     CERT_DestroyCertList(list);
     slapi_ch_free_string(&CertExtractFile);
@@ -2671,6 +2686,38 @@ bail:
         PR_Close(outFile);
     }
     return rv;
+}
+
+/* Helper for get_supported_key_type */
+static char *
+buf_add_str(char *buf, char *bufend, const char *str)
+{
+    /* bufend is sizeof(buf)-4 (to avoid overflow with ...) */
+    char *ret = buf+strlen(str);
+    if (ret > bufend) {
+        ret = bufend;
+        strcpy(buf, "...");
+    } else {
+        strcpy(buf, str);
+    }
+    return ret;
+}
+
+static void
+get_supported_key_type_names(char *buf, size_t bufsize)
+{
+    char *bufend = buf + bufsize - 4;
+    for (size_t i=0; supported_key_types[i].kt; i++) {
+        if (i>0) {
+            if (supported_key_types[i+1].kt == 0) {
+                /* Last supported key type */
+                buf = buf_add_str(buf, bufend, " or ");
+            } else {
+                buf = buf_add_str(buf, bufend, ", ");
+            }
+        }
+        buf = buf_add_str(buf, bufend, supported_key_types[i].shortname);
+    }
 }
 
 /*
@@ -2733,10 +2780,20 @@ extractKeysAndSubject(
     }
 
     keytype = (*privkey)->keyType;
-    if  (keytype != rsaKey && keytype != ecKey) {
-        slapi_log_err(SLAPI_LOG_ERR, "extractKeysAndSubject",
-                      "Unexpected key algorythm in certificate: %s. Only rsa and ec keys are supported.\n", nickname);
-        goto bail;
+    for (size_t i=0; ;i++) {
+        KeyType kt = supported_key_types[i].kt;
+        if (kt == keytype && keytype != 0) {
+            /* Stop looping if the key type is supported */
+            break;
+        }
+        if (kt == 0) {
+            /* No supported key type have been found. */
+            char sktnames[100] = "";
+            get_supported_key_type_names(sktnames, sizeof sktnames);
+            slapi_log_err(SLAPI_LOG_ERR, "extractKeysAndSubject",
+                          "Unexpected key algorithm in certificate: %s. Only %s are supported.\n", nickname, sktnames);
+            goto bail;
+        }
     }
 
     *subject = CERT_AsciiToName(cert->subjectName);
@@ -3012,6 +3069,10 @@ slapd_extract_key(Slapi_Entry *entry, char *token __attribute__((unused)), PK11S
     PR_fprintf(outFile, "\n%s\n", KEY_TRAILER);
 #endif
     rv = SECSuccess;
+
+    slapi_ch_free_string(&key_extract_file);
+    key_extract_file = slapi_ch_strdup(keyfile);
+
 bail:
     slapi_ch_free_string(&certdir);
     slapi_ch_free_string(&KeyExtractFile);
@@ -3064,4 +3125,67 @@ slapi_set_cacertfile(char *certfile)
 {
     slapi_ch_free_string(&CACertPemFile);
     CACertPemFile = certfile;
+}
+
+/*
+ * Function handling on line certificat refresh
+ */
+
+static void
+pop_ssl_layer(PRFileDesc *fd)
+{
+    /*
+     * Remove ssl layer from listening fd stack to stop using the old
+     * certificate
+     */
+    PRFileDesc *oldsock = PR_PopIOLayer(fd, PR_TOP_IO_LAYER);
+    if (oldsock != NULL) {
+        PRDescIdentity id = PR_GetLayersIdentity(oldsock);
+        const char *name = PR_GetNameForIdentity(id);
+        slapi_log_err(SLAPI_LOG_DEBUG, "pop_ssl_layer", "Poping %s layer\n", name);
+        if (oldsock->dtor) {
+            oldsock->dtor(oldsock); /* Call nspr layer destructor */
+        }
+    }
+}
+
+void
+refresh_certs(daemon_ports_t *ports)
+{
+    /*
+     * replace the server certificate(s)
+     */
+    PRFileDesc **sock = NULL;
+    bool stop = false;
+
+    slapi_log_err(SLAPI_LOG_WARNING, "Security certificates refresh",
+                  "Certificate refresh started.\n");
+
+    /* Perform some cleanup */
+    _security_library_initialized = 0;
+    for (sock = ports->s_socket; sock && *sock; sock++) {
+        pop_ssl_layer(*sock);
+    }
+    SSL_ClearSessionCache();
+
+    slapd_ssl_init();
+    if (_security_library_initialized == 0) {
+        slapi_log_err(SLAPI_LOG_CRIT, "Security certificates refresh",
+            "Failed to reinitialize the security module. Stopping the server.");
+        stop = true;
+    }
+
+    for (sock = ports->s_socket; sock && *sock; sock++) {
+        if (slapd_ssl_init2(sock, 0)) {
+            slapi_log_err(SLAPI_LOG_CRIT, "Security certificates refresh",
+                "Failed to update the new certificates. Stopping the server.");
+            stop = true;
+        }
+    }
+    if (stop) {
+        g_set_shutdown(SLAPI_SHUTDOWN_EXIT);
+    }
+
+    slapi_log_err(SLAPI_LOG_WARNING, "Security certificates refresh",
+                  "Certificate refresh completed.\n");
 }

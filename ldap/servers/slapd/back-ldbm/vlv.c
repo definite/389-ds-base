@@ -412,7 +412,7 @@ vlv_rebuild_scope_filter(backend *be)
     }
     slapi_rwlock_unlock(be->vlvSearchList_lock);
     if (txn == &new_txn) {
-        dblayer_txn_abort(be, txn);
+        dblayer_read_txn_abort(be, txn);
     }
     slapi_pblock_destroy(pb);
 }
@@ -503,23 +503,22 @@ vlv_init(ldbm_instance *inst)
 
     /* Initialize lock first time through */
     if (be->vlvSearchList_lock == NULL) {
-        char *rwlockname = slapi_ch_smprintf("vlvSearchList_%s", inst->inst_name);
         be->vlvSearchList_lock = slapi_new_rwlock();
-        slapi_ch_free((void **)&rwlockname);
     }
+
+    slapi_rwlock_wrlock(be->vlvSearchList_lock);
     if (NULL != (struct vlvSearch *)be->vlvSearchList) {
         struct vlvSearch *t = NULL;
         struct vlvSearch *nt = NULL;
         /* vlvSearchList is modified; need Wlock */
-        slapi_rwlock_wrlock(be->vlvSearchList_lock);
         for (t = (struct vlvSearch *)be->vlvSearchList; NULL != t;) {
             nt = t->vlv_next;
             vlvSearch_delete(&t);
             t = nt;
         }
         be->vlvSearchList = NULL;
-        slapi_rwlock_unlock(be->vlvSearchList_lock);
     }
+    slapi_rwlock_unlock(be->vlvSearchList_lock);
 
     {
         basedn = slapi_create_dn_string("cn=%s,cn=%s,cn=plugins,cn=config",
@@ -674,7 +673,7 @@ vlv_getindexnames(backend *be)
 /* Return the list of VLV indices to the import code. Added read lock */
 
 void
-vlv_getindices(IFP callback_fn, void *param, backend *be)
+vlv_getindices(int32_t (*callback_fn)(caddr_t, caddr_t), void *param, backend *be)
 {
     /* Traverse the list, calling the import code's callback function */
     struct vlvSearch *ps = NULL;
@@ -684,7 +683,7 @@ vlv_getindices(IFP callback_fn, void *param, backend *be)
     for (; ps != NULL; ps = ps->vlv_next) {
         struct vlvIndex *pi = ps->vlv_index;
         for (; pi != NULL; pi = pi->vlv_next) {
-            callback_fn(pi->vlv_attrinfo, param);
+            callback_fn((caddr_t)(pi->vlv_attrinfo), (caddr_t)param);
         }
     }
     slapi_rwlock_unlock(be->vlvSearchList_lock);
@@ -705,7 +704,7 @@ vlv_getindices(IFP callback_fn, void *param, backend *be)
  * generate the same composite key, so we append the EntryID
  * to ensure the uniqueness of the key.
  *
- * Always creates a key. Never returns NULL.
+ * May return NULL in case of errors (typically in some configuration error cases)
  */
 static struct vlv_key *
 vlv_create_key(struct vlvIndex *p, struct backentry *e)
@@ -759,10 +758,8 @@ vlv_create_key(struct vlvIndex *p, struct backentry *e)
                         /* Matching rule. Do the magic mangling. Plugin owns the memory. */
                         if (p->vlv_mrpb[sortattr] != NULL) {
                             /* xxxPINAKI */
-                            struct berval **bval = NULL;
                             Slapi_Value **va = valueset_get_valuearray(&attr->a_present_values);
-                            valuearray_get_bervalarray(va, &bval);
-                            matchrule_values_to_keys(p->vlv_mrpb[sortattr], bval, &value);
+                            matchrule_values_to_keys(p->vlv_mrpb[sortattr], va, &value);
                         }
                     }
 
@@ -869,6 +866,7 @@ do_vlv_update_index(back_txn *txn, struct ldbminfo *li, Slapi_PBlock *pb, struct
     struct vlv_key *key = NULL;
     dbi_val_t data = {0};
     dblayer_private *priv = NULL;
+    size_t key_size_limit = li->li_max_key_len - sizeof(entry->ep_id);
 
     slapi_pblock_get(pb, SLAPI_BACKEND, &be);
     priv = (dblayer_private *)li->li_dblayer_private;
@@ -882,6 +880,17 @@ do_vlv_update_index(back_txn *txn, struct ldbminfo *li, Slapi_PBlock *pb, struct
     }
 
     key = vlv_create_key(pIndex, entry);
+    if (key == NULL) {
+        slapi_log_err(SLAPI_LOG_ERR, "vlv_create_key", "Unable to generate vlv %s index key."
+                      " There may be a configuration issue.\n", pIndex->vlv_name);
+        dblayer_release_index_file(be, pIndex->vlv_attrinfo, db);
+        return rc;
+    }
+
+    /* Truncate the key if it is too long */
+    if (key->key.size > key_size_limit) {
+        key->key.size = key_size_limit;
+    }
     if (NULL != txn) {
         db_txn = txn->back_txn_txn;
     } else {
@@ -926,7 +935,7 @@ do_vlv_update_index(back_txn *txn, struct ldbminfo *li, Slapi_PBlock *pb, struct
         if (txn && txn->back_special_handling_fn) {
             rc = txn->back_special_handling_fn(be, BTXNACT_VLV_DEL, db, &key->key, &data, txn);
         } else {
-            rc = dblayer_db_op(be, db, db_txn, DBI_OP_DEL, &key->key, NULL);
+            rc = dblayer_db_op(be, db, db_txn, DBI_OP_DEL, &key->key, &data);
         }
         if (rc == 0) {
             if (txn && txn->back_special_handling_fn) {
@@ -1073,11 +1082,11 @@ vlv_create_matching_rule_value(Slapi_PBlock *pb, struct berval *original_value)
     struct berval **value = NULL;
     if (pb != NULL) {
         struct berval **outvalue = NULL;
-        struct berval *invalue[2];
-        invalue[0] = original_value; /* jcm: cast away const */
-        invalue[1] = NULL;
+        Slapi_Value v_in = {0};
+        Slapi_Value *va_in[2] = { &v_in, NULL };
+        slapi_value_init_berval(&v_in, original_value);
         /* The plugin owns the memory it returns in outvalue */
-        matchrule_values_to_keys(pb, invalue, &outvalue);
+        matchrule_values_to_keys(pb, va_in, &outvalue);
         if (outvalue != NULL) {
             value = slapi_ch_bvecdup(outvalue);
         }
@@ -1477,20 +1486,14 @@ vlv_filter_candidates(backend *be, Slapi_PBlock *pb, const IDList *candidates, c
 
             /* Check to see if our journey is really necessary */
             if (counter++ % 10 == 0) {
-/* check time limit */
-#ifdef HAVE_CLOCK_GETTIME
+                /* check time limit */
                 if (slapi_timespec_expire_check(expire_time) == TIMER_EXPIRED) {
-                    slapi_log_err(SLAPI_LOG_TRACE, "vlv_filter_candidates", "LDAP_TIMELIMIT_EXCEEDED\n");
+                    slapi_log_err(SLAPI_LOG_TRACE, "vlv_filter_candidates",
+                                  "LDAP_TIMELIMIT_EXCEEDED\n");
                     return_value = LDAP_TIMELIMIT_EXCEEDED;
                     done = 1;
                 }
-#else
-                time_t curtime = current_time();
-                if (time_up != -1 && curtime > time_up) {
-                    return_value = LDAP_TIMELIMIT_EXCEEDED;
-                    done = 1;
-                }
-#endif
+
                 /* check lookthrough limit */
                 if (lookthrough_limit != -1 && lookedat > lookthrough_limit) {
                     return_value = LDAP_ADMINLIMIT_EXCEEDED;
@@ -1672,7 +1675,7 @@ vlv_trim_candidates_byvalue(backend *be, const IDList *candidates, const sort_sp
             slapi_attr_values2keys(&sort_control->sattr, invalue, &typedown_value, LDAP_FILTER_EQUALITY); /* JCM SLOW FUNCTION */
             if (compare_fn == NULL) {
                 slapi_log_err(SLAPI_LOG_WARNING, "vlv_trim_candidates_byvalue",
-                              "Attempt to compare an unordered attribute");
+                              "Attempt to compare an unordered attribute\n");
                 compare_fn = slapi_berval_cmp;
             }
         }
@@ -1726,11 +1729,8 @@ retry:
                 PRBool needFree = PR_FALSE;
 
                 if (sort_control->mr_pb != NULL) {
-                    struct berval **tmp_entry_value = NULL;
-
-                    valuearray_get_bervalarray(csn_value, &tmp_entry_value);
                     /* Matching rule. Do the magic mangling. Plugin owns the memory. */
-                    matchrule_values_to_keys(sort_control->mr_pb, /* xxxPINAKI needs modification attr->a_vals */ tmp_entry_value, &entry_value);
+                    matchrule_values_to_keys(sort_control->mr_pb, csn_value, &entry_value);
                 } else {
                     valuearray_get_bervalarray(csn_value, &entry_value);
                     needFree = PR_TRUE; /* entry_value is a copy */
@@ -1850,55 +1850,74 @@ vlv_make_response_control(Slapi_PBlock *pb, const struct vlv_response *vlvp)
  * Generate a logging string for the vlv request and response
  */
 void
-vlv_print_access_log(Slapi_PBlock *pb, struct vlv_request *vlvi, struct vlv_response *vlvo)
+vlv_print_access_log(Slapi_PBlock *pb,
+                     struct vlv_request *vlvi,
+                     struct vlv_response *vlvo,
+                     sort_spec_thing *sort_control)
 {
-#define VLV_LOG_BS (21 * 6 + 4 + 5) /* space for 20-digit values for all parameters + 'VLV ' + status */
-    char stack_buffer[VLV_LOG_BS];
-    char *buffer = stack_buffer;
-    char *p;
+    #define NUMLEN 10 /* 32 bit integer maximum lenght (i.e minus + up to 9 digits) */
+    char resp_status[3*NUMLEN+5];
+    char buffer[4+NUMLEN*3+4+sizeof resp_status];
+    int32_t log_format = config_get_accesslog_log_format();
 
-    if (vlvi->value.bv_len > 20) {
-        buffer = slapi_ch_malloc(VLV_LOG_BS + vlvi->value.bv_len);
-    }
-    p = buffer;
-    p += sprintf(p, "VLV ");
-    if (0 == vlvi->tag) {
-        /* By Index case */
-        p += sprintf(p, "%d:%d:%d:%d",
-                     vlvi->beforeCount,
-                     vlvi->afterCount,
-                     vlvi->index,
-                     vlvi->contentCount);
+    if (log_format != LOG_FORMAT_DEFAULT) {
+        slapd_log_pblock logpb = {0};
+
+        slapd_log_pblock_init(&logpb, log_format, pb);
+        logpb.vlv_req_before_count = vlvi->beforeCount;
+        logpb.vlv_req_after_count = vlvi->afterCount;
+        logpb.vlv_req_content_count = vlvi->contentCount;
+        logpb.vlv_req_index = vlvi->index;
+        logpb.vlv_req_value = vlvi->value.bv_val;
+        logpb.vlv_req_value_len = vlvi->value.bv_len;
+        if (sort_control) {
+            logpb.vlv_sort_str = sort_log_access(pb, sort_control, NULL, PR_TRUE);
+        } else {
+            logpb.vlv_sort_str = slapi_ch_strdup("None ");
+        }
+        if (vlvo) {
+            logpb.vlv_res_target_position = vlvo->targetPosition;
+            logpb.vlv_res_content_count = vlvo->contentCount;
+            logpb.vlv_res_result = vlvo->result;
+        }
+        slapd_log_access_vlv(&logpb);
+        slapi_ch_free_string((char **)&logpb.vlv_sort_str);
     } else {
-/* By value case */
-#define VLV_LOG_SS 32
-        char stack_string[VLV_LOG_SS];
-        char *string = stack_string;
-
-        if (vlvi->value.bv_len >= VLV_LOG_SS) {
-            string = slapi_ch_malloc(vlvi->value.bv_len + 1);
+        /* Prepare VLV response */
+        if (vlvo == NULL) {
+            strcpy(resp_status, "None");
+        } else {
+            sprintf(resp_status, "%d:%d (%d)",
+                    vlvo->targetPosition,
+                    vlvo->contentCount,
+                    vlvo->result);
         }
-        strncpy(string, vlvi->value.bv_val, vlvi->value.bv_len);
-        string[vlvi->value.bv_len] = '\0';
-        p += sprintf(p, "%d:%d:%s",
-                     vlvi->beforeCount,
-                     vlvi->afterCount,
-                     string);
-        if (string != stack_string) {
-            slapi_ch_free((void **)&string);
+
+        /* Prepare VLV result + response*/
+        if (0 == vlvi->tag) {
+            PR_snprintf(buffer, (sizeof buffer), "VLV %d:%d:%d:%d %s",
+                        vlvi->beforeCount,
+                        vlvi->afterCount,
+                        vlvi->index,
+                        vlvi->contentCount,
+                        resp_status);
+            ldbm_log_access_message(pb, buffer);
+        } else {
+            char fmt[18+NUMLEN];
+            char *msg = NULL;
+            PR_snprintf(fmt, (sizeof fmt), "VLV %%d:%%d:%%.%lds %%s", vlvi->value.bv_len);
+
+            msg = slapi_ch_smprintf(fmt,
+                                    vlvi->beforeCount,
+                                    vlvi->afterCount,
+                                    vlvi->value.bv_val,
+                                    resp_status);
+            ldbm_log_access_message(pb, msg);
+            slapi_ch_free_string(&msg);
         }
-    }
-    /* Now the response info */
-    p += sprintf(p, " %d:%d (%d)",
-                 vlvo->targetPosition,
-                 vlvo->contentCount,
-                 vlvo->result);
-
-
-    ldbm_log_access_message(pb, buffer);
-
-    if (buffer != stack_buffer) {
-        slapi_ch_free((void **)&buffer);
+        if (sort_control) {
+            sort_log_access(pb, sort_control, NULL, PR_FALSE);
+        }
     }
 }
 

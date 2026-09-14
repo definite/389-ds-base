@@ -177,6 +177,12 @@ modify_update_all(backend *be, Slapi_PBlock *pb, modify_context *mc, back_txn *t
         slapi_pblock_get(pb, SLAPI_OPERATION, &operation);
         is_ruv = operation_is_flag_set(operation, OP_FLAG_REPL_RUV);
     }
+    if (NULL == mc->new_entry) {
+        /* test entry to avoid crashing in id2entry_add_ext */
+        slapi_log_err(SLAPI_LOG_BACKLDBM, "modify_update_all",
+                      "No entry in modify_context ==> operation is aborted.\n");
+        return -1;
+    }
     /*
      * Update the ID to Entry index.
      * Note that id2entry_add replaces the entry, so the Entry ID stays the same.
@@ -512,6 +518,7 @@ ldbm_back_modify(Slapi_PBlock *pb)
     entry_address *addr;
     int is_fixup_operation = 0;
     int is_ruv = 0; /* True if the current entry is RUV */
+    int is_internal = 0;
     CSN *opcsn = NULL;
     int repl_op;
     int opreturn = 0;
@@ -535,6 +542,7 @@ ldbm_back_modify(Slapi_PBlock *pb)
     slapi_pblock_get(pb, SLAPI_OPERATION, &operation);
 
     fixup_tombstone = operation_is_flag_set(operation, OP_FLAG_TOMBSTONE_FIXUP);
+    is_internal = operation_is_flag_set(operation, OP_FLAG_INTERNAL);
 
     dblayer_txn_init(li, &txn); /* must do this before first goto error_return */
     /* the calls to perform searches require the parent txn if any
@@ -1165,6 +1173,9 @@ common_return:
         }
         if (!result_sent) {
             /* result is already sent in find_entry. */
+            if (!is_internal) {
+                slapi_pblock_wait_deferred_memberof(pb);
+            }
             slapi_send_ldap_result(pb, ldap_result_code, NULL, ldap_result_message, 0, NULL);
         }
     }
